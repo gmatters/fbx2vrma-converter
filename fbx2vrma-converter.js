@@ -595,6 +595,10 @@ class FBXToVRMAConverterFixed {
 
     // Build VRMA output
     const humanBones = this.generateHumanBones(gltfData);
+    const boneCount = Object.keys(humanBones).length;
+    if (boneCount === 0) {
+      throw new Error('No humanoid bones matched. Check input skeleton bone names or add mappings before converting to VRMA.');
+    }
     const metadata = gltfData.extras?.animationMetadata;
     const vrmaData = {
       asset: gltfData.asset,
@@ -627,7 +631,7 @@ class FBXToVRMAConverterFixed {
       }
     };
 
-    console.log(`Generated VRMA with ${Object.keys(humanBones).length} bones and ${animationDuration}s duration`);
+    console.log(`Generated VRMA with ${boneCount} bones and ${animationDuration}s duration`);
 
     return vrmaData;
   }
@@ -701,15 +705,39 @@ class FBXToVRMAConverterFixed {
     }
 
     gltfData.nodes.forEach((node, index) => {
-      if (node.name && this.humanoidBoneMapping[node.name]) {
-        const vrmBoneName = this.humanoidBoneMapping[node.name];
+      const vrmBoneName = this.getVRMBoneName(node.name);
+      if (vrmBoneName) {
         humanBones[vrmBoneName] = {
           node: index
         };
       }
     });
 
+    this.logUnmatchedBones(gltfData.nodes);
+
     return humanBones;
+  }
+
+  logUnmatchedBones(nodes = []) {
+    const unmatchedBones = nodes
+      .map((node, index) => ({ name: node.name, index }))
+      .filter(({ name }) => name && this.isLikelyBoneName(name) && !this.getVRMBoneName(name));
+
+    if (unmatchedBones.length === 0) return;
+
+    console.warn(`Unmatched bone-like nodes (${unmatchedBones.length}):`);
+    unmatchedBones.forEach(({ name, index }) => {
+      console.warn(`  [${index}] ${name}`);
+    });
+  }
+
+  isLikelyBoneName(name) {
+    return /bone|joint|mixamorig|hips|spine|chest|neck|head|shoulder|arm|forearm|hand|thumb|index|middle|ring|pinky|leg|upleg|foot|toe/i.test(name);
+  }
+
+  getVRMBoneName(nodeName) {
+    if (!nodeName) return undefined;
+    return this.humanoidBoneMapping[nodeName] || this.humanoidBoneMapping[`mixamorig:${nodeName}`];
   }
 
   async saveAsGLB(vrmaData, outputPath) {

@@ -83,21 +83,51 @@ describe('generateHumanBones', () => {
     });
   });
 
-  it('should skip nodes without matching bone names', () => {
+  it('should map Mixamo bone names without the mixamorig prefix', () => {
     const converter = createConverter();
     const gltfData = {
       nodes: [
-        { name: 'mixamorig:Hips' },
-        { name: 'SomeUnknownBone' },
-        { name: 'mixamorig:Head' },
+        { name: 'Hips' },
+        { name: 'Spine' },
+        { name: 'Head' },
+        { name: 'LeftHand' },
       ],
     };
 
     const bones = converter.generateHumanBones(gltfData);
 
-    assert.equal(Object.keys(bones).length, 2);
-    assert.deepStrictEqual(bones.hips, { node: 0 });
-    assert.deepStrictEqual(bones.head, { node: 2 });
+    assert.deepStrictEqual(bones, {
+      hips: { node: 0 },
+      spine: { node: 1 },
+      head: { node: 2 },
+      leftHand: { node: 3 },
+    });
+  });
+
+  it('should skip nodes without matching bone names', () => {
+    const converter = createConverter();
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = message => warnings.push(message);
+    const gltfData = {
+      nodes: [
+        { name: 'mixamorig:Hips' },
+        { name: 'mixamorig:UnknownBone' },
+        { name: 'mixamorig:Head' },
+      ],
+    };
+
+    try {
+      const bones = converter.generateHumanBones(gltfData);
+
+      assert.equal(Object.keys(bones).length, 2);
+      assert.deepStrictEqual(bones.hips, { node: 0 });
+      assert.deepStrictEqual(bones.head, { node: 2 });
+      assert.ok(warnings.some(message => message.includes('Unmatched bone-like nodes')));
+      assert.ok(warnings.some(message => message.includes('mixamorig:UnknownBone')));
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   it('should return empty object when no nodes exist', () => {
@@ -440,7 +470,7 @@ describe('convertToVRMAWithTiming', () => {
     const converter = createConverter();
     const gltfData = {
       asset: { version: '2.0' },
-      nodes: [],
+      nodes: [{ name: 'mixamorig:Hips' }],
       animations: [],
       accessors: [],
       bufferViews: [],
@@ -452,6 +482,23 @@ describe('convertToVRMAWithTiming', () => {
     assert.equal(vrma.extras.duration, 5.0);
     assert.equal(vrma.extras.framerate, 30);
     assert.equal(vrma.extras.frameCount, 0);
+  });
+
+  it('should fail when no humanoid bones are matched', () => {
+    const converter = createConverter();
+    const gltfData = {
+      asset: { version: '2.0' },
+      nodes: [{ name: 'UnknownRootBone' }],
+      animations: [],
+      accessors: [],
+      bufferViews: [],
+      buffers: [],
+    };
+
+    assert.throws(
+      () => converter.convertToVRMAWithTiming(gltfData),
+      /No humanoid bones matched/
+    );
   });
 });
 
