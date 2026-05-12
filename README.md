@@ -84,6 +84,26 @@ node fbx2vrma-converter.js -i ./FBX/ -o ./VRMA/
 
 Output filenames are derived from the input filenames (`Walk.fbx` → `Walk.vrma`).
 
+### Loop trimming
+
+Trim points are specified in seconds, matching glTF animation sampler time units. The converter shifts the trimmed in point to time `0` and excludes the exact out point to avoid duplicating the loop pose.
+
+```bash
+node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3.75
+```
+
+If you are choosing loop points in an editor such as Blender, you can specify frame numbers instead. Frame numbers are converted to seconds using `--framerate`.
+
+```bash
+node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in-frame 45 --trim-out-frame 120 --framerate 30
+```
+
+Use `--loop-smoothing` to blend the tail of the clip toward the first pose. When smoothing is enabled, the converter ensures a sample exists one frame before the out point based on `--framerate`, adding it only if necessary, but still does not include the exact out pose.
+
+```bash
+node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3.75 --loop-smoothing 0.25 --framerate 30
+```
+
 ### Options
 
 | Option | Description | Default |
@@ -92,6 +112,11 @@ Output filenames are derived from the input filenames (`Walk.fbx` → `Walk.vrma
 | `-o, --output <path>` | Output VRMA file or directory | Same directory as input |
 | `--fbx2gltf <path>` | Path to FBX2glTF binary | Auto-detected by OS |
 | `--framerate <fps>` | Animation framerate | `30` |
+| `--trim-in <seconds>` | Trim start time; shifted to output time `0` | — |
+| `--trim-out <seconds>` | Trim end time; exact out pose is excluded | — |
+| `--trim-in-frame <frame>` | Trim start frame, converted with `--framerate` | — |
+| `--trim-out-frame <frame>` | Trim end frame, converted with `--framerate`; exact out pose is excluded | — |
+| `--loop-smoothing <seconds>` | Blend tail samples toward the first pose over this duration | `0` |
 | `-V, --version` | Show version | — |
 | `-h, --help` | Show help | — |
 

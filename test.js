@@ -8,6 +8,57 @@ function createConverter() {
   return new FBXToVRMAConverterFixed();
 }
 
+function createFloatBuffer(elements) {
+  const flattened = elements.flat();
+  const buffer = Buffer.alloc(flattened.length * 4);
+  flattened.forEach((value, index) => buffer.writeFloatLE(value, index * 4));
+  return buffer;
+}
+
+function createAnimationGltf(times, values, valueType = 'SCALAR') {
+  const components = valueType === 'VEC4' ? 4 : valueType === 'VEC3' ? 3 : 1;
+  const timeElements = times.map(time => [time]);
+  const valueElements = values.map(value => Array.isArray(value) ? value : [value]);
+  const timeBuffer = createFloatBuffer(timeElements);
+  const valueBuffer = createFloatBuffer(valueElements);
+  const buffer = Buffer.concat([timeBuffer, valueBuffer]);
+
+  return {
+    asset: { version: '2.0' },
+    animations: [{
+      name: 'Loop',
+      channels: [{ sampler: 0, target: { node: 0, path: 'translation' } }],
+      samplers: [{ input: 0, output: 1, interpolation: 'LINEAR' }],
+    }],
+    accessors: [
+      {
+        bufferView: 0,
+        componentType: 5126,
+        count: times.length,
+        type: 'SCALAR',
+        min: [Math.min(...times)],
+        max: [Math.max(...times)],
+      },
+      {
+        bufferView: 1,
+        componentType: 5126,
+        count: values.length,
+        type: valueType,
+        min: Array.from({ length: components }, (_, index) => Math.min(...valueElements.map(value => value[index]))),
+        max: Array.from({ length: components }, (_, index) => Math.max(...valueElements.map(value => value[index]))),
+      },
+    ],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: timeBuffer.length },
+      { buffer: 0, byteOffset: timeBuffer.length, byteLength: valueBuffer.length },
+    ],
+    buffers: [{
+      byteLength: buffer.length,
+      uri: `data:application/octet-stream;base64,${buffer.toString('base64')}`,
+    }],
+  };
+}
+
 describe('generateHumanBones', () => {
   it('should map Mixamo bone names to VRM humanoid bones', () => {
     const converter = createConverter();
@@ -101,6 +152,83 @@ describe('generateHumanBones', () => {
     const gltfData = { nodes: fingerMixamoNames.map(name => ({ name })) };
     const bones = converter.generateHumanBones(gltfData);
     assert.equal(Object.keys(bones).length, 30);
+  });
+});
+
+describe('trimAnimationData', () => {
+  it('should trim sampler data and shift the in point to time zero', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
+
+    converter.trimAnimationData(gltfData, { trimIn: 1, trimOut: 3 });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const times = converter.readAccessorElements(gltfData, buffers, sampler.input).map(value => value[0]);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output).map(value => value[0]);
+
+    assert.deepStrictEqual(times, [0, 1]);
+    assert.deepStrictEqual(values, [10, 20]);
+    assert.equal(gltfData.accessors[sampler.input].min[0], 0);
+    assert.equal(gltfData.accessors[sampler.input].max[0], 1);
+  });
+
+  it('should sample fractional in points and exclude the exact out point', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
+
+    converter.trimAnimationData(gltfData, { trimIn: 0.5, trimOut: 2 });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const times = converter.readAccessorElements(gltfData, buffers, sampler.input).map(value => value[0]);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output).map(value => value[0]);
+
+    assert.deepStrictEqual(times, [0, 0.5]);
+    assert.deepStrictEqual(values, [5, 10]);
+  });
+
+  it('should convert frame trim points to seconds using framerate', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0, 0.5, 1, 1.5], [0, 5, 10, 15]);
+
+    converter.trimAnimationData(gltfData, { trimInFrame: 15, trimOutFrame: 45, framerate: 30 });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const times = converter.readAccessorElements(gltfData, buffers, sampler.input).map(value => value[0]);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output).map(value => value[0]);
+
+    assert.deepStrictEqual(times, [0, 0.5]);
+    assert.deepStrictEqual(values, [5, 10]);
+  });
+
+  it('should reject mixed seconds and frame trim options', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
+
+    assert.throws(
+      () => converter.trimAnimationData(gltfData, { trimIn: 1, trimOutFrame: 60, framerate: 30 }),
+      /Use either seconds trim options or frame trim options/
+    );
+  });
+
+  it('should blend tail samples toward the first pose when loop smoothing is enabled', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
+
+    converter.trimAnimationData(gltfData, { trimIn: 0, trimOut: 3, loopSmoothing: 2, framerate: 2 });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const times = converter.readAccessorElements(gltfData, buffers, sampler.input).map(value => value[0]);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output).map(value => value[0]);
+
+    assert.deepStrictEqual(times, [0, 1, 2, 2.5]);
+    assert.equal(values[0], 0);
+    assert.equal(values[1], 10);
+    assert.ok(values[2] < 20 && values[2] > 0);
+    assert.ok(values[3] < values[2] && values[3] > 0);
   });
 });
 

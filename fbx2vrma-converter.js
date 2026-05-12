@@ -20,6 +20,26 @@ function getDefaultBinaryName() {
   return 'FBX2glTF-darwin-x64';
 }
 
+const COMPONENT_TYPE_FLOAT = 5126;
+const ACCESSOR_COMPONENTS = {
+  SCALAR: 1,
+  VEC2: 2,
+  VEC3: 3,
+  VEC4: 4,
+  MAT2: 4,
+  MAT3: 9,
+  MAT4: 16,
+};
+
+function parseOptionalNumber(value, name) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw new Error(`${name} must be a number`);
+  }
+  return number;
+}
+
 class FBXToVRMAConverterFixed {
   constructor({ parse = false } = {}) {
     this.program = new Command();
@@ -94,14 +114,19 @@ class FBXToVRMAConverterFixed {
       .requiredOption('-i, --input <path>', 'Input FBX file path')
       .option('-o, --output <path>', 'Output VRMA file path (default: same name as input with .vrma extension)')
       .option('--fbx2gltf <path>', 'Path to FBX2glTF binary', `./${getDefaultBinaryName()}`)
-      .option('--framerate <fps>', 'Animation framerate', '30');
+      .option('--framerate <fps>', 'Animation framerate', '30')
+      .option('--trim-in <seconds>', 'Trim start time in seconds')
+      .option('--trim-out <seconds>', 'Trim end time in seconds')
+      .option('--trim-in-frame <frame>', 'Trim start frame, converted to seconds using --framerate')
+      .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
+      .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0');
 
     if (parse) {
       this.program.parse();
     }
   }
 
-  async convert(inputPath, outputPath, fbx2gltfPath, framerate) {
+  async convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions = {}) {
     // Declared outside try so it's accessible in finally
     const tempGltfPath = path.join(path.dirname(outputPath), `temp_${Date.now()}.gltf`);
     try {
@@ -124,16 +149,19 @@ class FBXToVRMAConverterFixed {
       // Step 2: Load glTF file
       const gltfData = await fs.readJson(tempGltfPath);
 
-      // Step 3: Analyze and enhance animation timing
-      const enhancedGltfData = this.enhanceAnimationTiming(gltfData, parseInt(framerate));
+      // Step 3: Embed binary data
+      const embeddedGltfData = await this.embedBinaryData(gltfData, path.dirname(tempGltfPath));
 
-      // Step 4: Embed binary data
-      const embeddedGltfData = await this.embedBinaryData(enhancedGltfData, path.dirname(tempGltfPath));
+      // Step 4: Trim animation data before timing metadata is calculated
+      const trimmedGltfData = this.trimAnimationData(embeddedGltfData, trimOptions);
 
-      // Step 5: Convert to VRMA format
-      const vrmaData = this.convertToVRMAWithTiming(embeddedGltfData);
+      // Step 5: Analyze and enhance animation timing
+      const enhancedGltfData = this.enhanceAnimationTiming(trimmedGltfData, parseInt(framerate));
 
-      // Step 6: Save VRMA as GLB binary
+      // Step 6: Convert to VRMA format
+      const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData);
+
+      // Step 7: Save VRMA as GLB binary
       await this.saveAsGLB(vrmaData, outputPath);
 
       console.log(`Successfully converted to ${outputPath}`);
@@ -276,6 +304,282 @@ class FBXToVRMAConverterFixed {
     }
 
     return gltfData;
+  }
+
+  trimAnimationData(gltfData, options = {}) {
+    const trimIn = parseOptionalNumber(options.trimIn, '--trim-in');
+    const trimOut = parseOptionalNumber(options.trimOut, '--trim-out');
+    const trimInFrame = parseOptionalNumber(options.trimInFrame, '--trim-in-frame');
+    const trimOutFrame = parseOptionalNumber(options.trimOutFrame, '--trim-out-frame');
+    const loopSmoothing = parseOptionalNumber(options.loopSmoothing, '--loop-smoothing') ?? 0;
+    const framerate = parseOptionalNumber(options.framerate, '--framerate') ?? 30;
+    const usesSeconds = trimIn !== undefined || trimOut !== undefined;
+    const usesFrames = trimInFrame !== undefined || trimOutFrame !== undefined;
+
+    if (!usesSeconds && !usesFrames) {
+      return gltfData;
+    }
+    if (usesSeconds && usesFrames) {
+      throw new Error('Use either seconds trim options or frame trim options, not both');
+    }
+    if (trimIn !== undefined && trimIn < 0) {
+      throw new Error('--trim-in must be greater than or equal to 0');
+    }
+    if (trimOut !== undefined && trimOut <= 0) {
+      throw new Error('--trim-out must be greater than 0');
+    }
+    if (trimIn !== undefined && trimOut !== undefined && trimOut <= trimIn) {
+      throw new Error('--trim-out must be greater than --trim-in');
+    }
+    if (loopSmoothing < 0) {
+      throw new Error('--loop-smoothing must be greater than or equal to 0');
+    }
+    if (framerate <= 0) {
+      throw new Error('--framerate must be greater than 0');
+    }
+    if (trimInFrame !== undefined && trimInFrame < 0) {
+      throw new Error('--trim-in-frame must be greater than or equal to 0');
+    }
+    if (trimOutFrame !== undefined && trimOutFrame <= 0) {
+      throw new Error('--trim-out-frame must be greater than 0');
+    }
+    if (trimInFrame !== undefined && trimOutFrame !== undefined && trimOutFrame <= trimInFrame) {
+      throw new Error('--trim-out-frame must be greater than --trim-in-frame');
+    }
+    if (!gltfData.animations?.length) {
+      return gltfData;
+    }
+
+    const start = usesFrames ? (trimInFrame ?? 0) / framerate : (trimIn ?? 0);
+    const fallbackEnd = this.getAnimationDuration(gltfData);
+    const end = usesFrames
+      ? (trimOutFrame !== undefined ? trimOutFrame / framerate : fallbackEnd)
+      : (trimOut ?? fallbackEnd);
+    if (!(end > start)) {
+      throw new Error('Trim range must have a positive duration');
+    }
+
+    console.log(`Trimming animations: ${start}s to ${end}s${loopSmoothing > 0 ? `, smoothing ${loopSmoothing}s` : ''}`);
+
+    const buffers = this.decodeBuffers(gltfData);
+    for (const animation of gltfData.animations) {
+      for (const sampler of animation.samplers || []) {
+        this.trimSampler(gltfData, buffers, sampler, start, end, loopSmoothing, framerate);
+      }
+    }
+    this.encodeBuffers(gltfData, buffers);
+    return gltfData;
+  }
+
+  getAnimationDuration(gltfData) {
+    let maxDuration = 0;
+    for (const animation of gltfData.animations || []) {
+      for (const sampler of animation.samplers || []) {
+        const accessor = gltfData.accessors?.[sampler.input];
+        if (accessor?.type === 'SCALAR' && accessor.max?.length) {
+          maxDuration = Math.max(maxDuration, accessor.max[0]);
+        }
+      }
+    }
+    return maxDuration;
+  }
+
+  trimSampler(gltfData, buffers, sampler, start, end, loopSmoothing, framerate) {
+    if (sampler.input === undefined || sampler.output === undefined) return;
+    if (sampler.interpolation === 'CUBICSPLINE') {
+      throw new Error('Trimming CUBICSPLINE animation samplers is not currently supported');
+    }
+
+    const inputAccessor = gltfData.accessors[sampler.input];
+    const outputAccessor = gltfData.accessors[sampler.output];
+    const times = this.readAccessorElements(gltfData, buffers, sampler.input).map(item => item[0]);
+    const values = this.readAccessorElements(gltfData, buffers, sampler.output);
+    if (times.length !== values.length) {
+      throw new Error('Animation sampler input/output counts do not match');
+    }
+
+    const trimmedTimes = [];
+    const trimmedValues = [];
+    this.pushTrimmedSample(trimmedTimes, trimmedValues, 0, this.sampleAt(times, values, start, sampler.interpolation, outputAccessor.type));
+
+    for (let i = 0; i < times.length; i++) {
+      const time = times[i];
+      if (time > start && time < end) {
+        trimmedTimes.push(time - start);
+        trimmedValues.push(values[i]);
+      }
+    }
+
+    const duration = end - start;
+    this.addPreLoopSample(trimmedTimes, trimmedValues, times, values, start, end, duration, loopSmoothing, framerate, sampler.interpolation, outputAccessor.type);
+    this.applyLoopSmoothing(trimmedTimes, trimmedValues, duration, loopSmoothing, outputAccessor.type);
+
+    if (trimmedTimes.length === 0) {
+      throw new Error('Trim produced no animation samples');
+    }
+
+    const inputIndex = this.appendAccessorData(gltfData, buffers, trimmedTimes.map(time => [time]), {
+      type: 'SCALAR',
+      componentType: inputAccessor.componentType,
+    });
+    const outputIndex = this.appendAccessorData(gltfData, buffers, trimmedValues, {
+      type: outputAccessor.type,
+      componentType: outputAccessor.componentType,
+    });
+
+    sampler.input = inputIndex;
+    sampler.output = outputIndex;
+  }
+
+  pushTrimmedSample(times, values, time, value) {
+    times.push(time);
+    values.push(value);
+  }
+
+  addPreLoopSample(trimmedTimes, trimmedValues, sourceTimes, sourceValues, start, end, duration, loopSmoothing, framerate, interpolation, type) {
+    if (loopSmoothing <= 0) return;
+    const preLoopTime = Math.max(0, duration - (1 / framerate));
+    const lastTime = trimmedTimes[trimmedTimes.length - 1];
+    if (preLoopTime <= lastTime + 1e-6) return;
+
+    trimmedTimes.push(preLoopTime);
+    trimmedValues.push(this.sampleAt(sourceTimes, sourceValues, start + preLoopTime, interpolation, type));
+  }
+
+  sampleAt(times, values, targetTime, interpolation, type) {
+    if (targetTime <= times[0]) return [...values[0]];
+    if (targetTime >= times[times.length - 1]) return [...values[values.length - 1]];
+
+    for (let i = 0; i < times.length - 1; i++) {
+      const t0 = times[i];
+      const t1 = times[i + 1];
+      if (targetTime < t0 || targetTime > t1) continue;
+      if (targetTime === t0 || interpolation === 'STEP') return [...values[i]];
+      if (targetTime === t1) return [...values[i + 1]];
+      const amount = (targetTime - t0) / (t1 - t0);
+      return this.interpolateValue(values[i], values[i + 1], amount, type);
+    }
+
+    return [...values[values.length - 1]];
+  }
+
+  applyLoopSmoothing(times, values, duration, smoothingSeconds, type) {
+    if (smoothingSeconds <= 0 || values.length < 2) return;
+
+    const windowStart = Math.max(0, duration - smoothingSeconds);
+    const firstValue = values[0];
+    for (let i = 1; i < values.length; i++) {
+      if (times[i] < windowStart) continue;
+      const amount = Math.min(1, Math.max(0, (times[i] - windowStart) / Math.max(duration - windowStart, Number.EPSILON)));
+      const eased = amount * amount * (3 - 2 * amount);
+      values[i] = this.interpolateValue(values[i], firstValue, eased, type);
+    }
+  }
+
+  interpolateValue(a, b, amount, type) {
+    if (type === 'VEC4') {
+      return this.normalizeQuat(this.lerpArray(a, this.alignQuaternion(a, b), amount));
+    }
+    return this.lerpArray(a, b, amount);
+  }
+
+  lerpArray(a, b, amount) {
+    return a.map((value, index) => value + (b[index] - value) * amount);
+  }
+
+  alignQuaternion(a, b) {
+    const dot = a.reduce((sum, value, index) => sum + value * b[index], 0);
+    return dot < 0 ? b.map(value => -value) : b;
+  }
+
+  normalizeQuat(value) {
+    const length = Math.hypot(...value);
+    return length > 0 ? value.map(item => item / length) : value;
+  }
+
+  decodeBuffers(gltfData) {
+    return (gltfData.buffers || []).map(buffer => {
+      if (!buffer.uri?.startsWith('data:')) {
+        throw new Error('Animation trimming requires embedded buffer data');
+      }
+      return Buffer.from(buffer.uri.split(',')[1], 'base64');
+    });
+  }
+
+  encodeBuffers(gltfData, buffers) {
+    buffers.forEach((buffer, index) => {
+      gltfData.buffers[index].byteLength = buffer.length;
+      gltfData.buffers[index].uri = `data:application/octet-stream;base64,${buffer.toString('base64')}`;
+    });
+  }
+
+  readAccessorElements(gltfData, buffers, accessorIndex) {
+    const accessor = gltfData.accessors[accessorIndex];
+    if (accessor.componentType !== COMPONENT_TYPE_FLOAT) {
+      throw new Error(`Only FLOAT animation accessors are supported, got componentType ${accessor.componentType}`);
+    }
+
+    const bufferView = gltfData.bufferViews[accessor.bufferView];
+    const components = ACCESSOR_COMPONENTS[accessor.type];
+    const elementByteLength = components * 4;
+    const stride = bufferView.byteStride || elementByteLength;
+    const baseOffset = (bufferView.byteOffset || 0) + (accessor.byteOffset || 0);
+    const buffer = buffers[bufferView.buffer || 0];
+    const elements = [];
+
+    for (let i = 0; i < accessor.count; i++) {
+      const elementOffset = baseOffset + i * stride;
+      const element = [];
+      for (let j = 0; j < components; j++) {
+        element.push(buffer.readFloatLE(elementOffset + j * 4));
+      }
+      elements.push(element);
+    }
+    return elements;
+  }
+
+  appendAccessorData(gltfData, buffers, elements, { type, componentType }) {
+    if (componentType !== COMPONENT_TYPE_FLOAT) {
+      throw new Error(`Only FLOAT animation accessors are supported, got componentType ${componentType}`);
+    }
+
+    const bufferIndex = 0;
+    const components = ACCESSOR_COMPONENTS[type];
+    const padding = (4 - (buffers[bufferIndex].length % 4)) % 4;
+    const byteOffset = buffers[bufferIndex].length + padding;
+    const data = Buffer.alloc(elements.length * components * 4);
+
+    elements.forEach((element, elementIndex) => {
+      for (let componentIndex = 0; componentIndex < components; componentIndex++) {
+        data.writeFloatLE(element[componentIndex], (elementIndex * components + componentIndex) * 4);
+      }
+    });
+
+    buffers[bufferIndex] = Buffer.concat([
+      buffers[bufferIndex],
+      Buffer.alloc(padding, 0),
+      data,
+    ]);
+
+    const bufferViewIndex = gltfData.bufferViews.length;
+    gltfData.bufferViews.push({
+      buffer: bufferIndex,
+      byteOffset,
+      byteLength: data.length,
+    });
+
+    const flattened = elements[0].map((_, componentIndex) => elements.map(element => element[componentIndex]));
+    const accessorIndex = gltfData.accessors.length;
+    gltfData.accessors.push({
+      bufferView: bufferViewIndex,
+      componentType,
+      count: elements.length,
+      type,
+      min: flattened.map(values => Math.min(...values)),
+      max: flattened.map(values => Math.max(...values)),
+    });
+
+    return accessorIndex;
   }
 
   convertToVRMAWithTiming(gltfData) {
@@ -460,7 +764,7 @@ class FBXToVRMAConverterFixed {
     console.log(`Saved GLB: ${totalLength} bytes (JSON: ${jsonPadded}, BIN: ${binPadded})`);
   }
 
-  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate) {
+  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate, trimOptions = {}) {
     const entries = await fs.readdir(inputDir);
     const fbxFiles = entries.filter(f => path.extname(f).toLowerCase() === '.fbx');
 
@@ -477,7 +781,7 @@ class FBXToVRMAConverterFixed {
       const inputPath  = path.join(inputDir, file);
       const outputPath = path.join(outputDir, path.basename(file, path.extname(file)) + '.vrma');
       console.log(`\n[${successCount + 1}/${fbxFiles.length}] ${file}`);
-      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate);
+      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions);
       if (ok) successCount++;
     }
 
@@ -524,6 +828,14 @@ class FBXToVRMAConverterFixed {
   async run() {
     const options = this.program.opts();
     const inputStat = await fs.stat(options.input).catch(() => null);
+    const trimOptions = {
+      trimIn: options.trimIn,
+      trimOut: options.trimOut,
+      trimInFrame: options.trimInFrame,
+      trimOutFrame: options.trimOutFrame,
+      loopSmoothing: options.loopSmoothing,
+      framerate: options.framerate,
+    };
 
     let success;
     if (inputStat?.isDirectory()) {
@@ -533,7 +845,8 @@ class FBXToVRMAConverterFixed {
         options.input,
         outputDir,
         options.fbx2gltf,
-        options.framerate
+        options.framerate,
+        trimOptions
       );
     } else {
       // Single file conversion mode
@@ -542,7 +855,8 @@ class FBXToVRMAConverterFixed {
         options.input,
         outputPath,
         options.fbx2gltf,
-        options.framerate
+        options.framerate,
+        trimOptions
       );
     }
     process.exit(success ? 0 : 1);
