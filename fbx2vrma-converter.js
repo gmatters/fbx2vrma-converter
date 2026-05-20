@@ -91,7 +91,7 @@ const MIXAMO_BONE_MAPPING = {
 };
 
 const MIMEM_UNITY_BONE_MAPPING = {
-  root1: 'hips',
+  'root.x': 'hips',
   'spine_01.x': 'spine',
   'spine_02.x': 'chest',
   'spine_03.x': 'upperChest',

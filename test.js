@@ -128,7 +128,7 @@ describe('generateHumanBones', () => {
     converter.setBoneProfile('mimem-unity');
     const gltfData = {
       nodes: [
-        { name: 'root1' },
+        { name: 'root.x' },
         { name: 'spine_01.x' },
         { name: 'spine_02.x' },
         { name: 'spine_03.x' },
