@@ -122,6 +122,11 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `-V, --version` | Show version | — |
 | `-h, --help` | Show help | — |
 
+Available bone profiles:
+
+- `auto` / `mixamo`: Mixamo bone names, with or without the `mixamorig:` prefix
+- `mimem-unity`: Mimem.ai Unity-style export names
+
 ### Debugging bone mappings
 
 Use `--dump-nodes` to inspect every glTF node after FBX2glTF conversion. The report includes node index, name, parent, children, mapped VRM bone, animation channels, transform fields, mesh, and skin.

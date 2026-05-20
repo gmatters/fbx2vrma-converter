@@ -90,6 +90,65 @@ const MIXAMO_BONE_MAPPING = {
   'mixamorig:RightHandPinky3':  'rightLittleDistal',
 };
 
+const MIMEM_UNITY_BONE_MAPPING = {
+  root1: 'hips',
+  'spine_01.x': 'spine',
+  'spine_02.x': 'chest',
+  'spine_03.x': 'upperChest',
+  'neck.x': 'neck',
+  'head.x': 'head',
+
+  'shoulder.l': 'leftShoulder',
+  'arm_stretch.l': 'leftUpperArm',
+  'forearm_stretch.l': 'leftLowerArm',
+  'hand.l': 'leftHand',
+  'thigh_stretch.l': 'leftUpperLeg',
+  'leg_stretch.l': 'leftLowerLeg',
+  'foot.l': 'leftFoot',
+  'toes_01.l': 'leftToes',
+
+  'shoulder.r': 'rightShoulder',
+  'arm_stretch.r': 'rightUpperArm',
+  'forearm_stretch.r': 'rightLowerArm',
+  'hand.r': 'rightHand',
+  'thigh_stretch.r': 'rightUpperLeg',
+  'leg_stretch.r': 'rightLowerLeg',
+  'foot.r': 'rightFoot',
+  'toes_01.r': 'rightToes',
+
+  'c_thumb1.l': 'leftThumbMetacarpal',
+  'c_thumb2.l': 'leftThumbProximal',
+  'c_thumb3.l': 'leftThumbDistal',
+  'c_index1.l': 'leftIndexProximal',
+  'c_index2.l': 'leftIndexIntermediate',
+  'c_index3.l': 'leftIndexDistal',
+  'c_middle1.l': 'leftMiddleProximal',
+  'c_middle2.l': 'leftMiddleIntermediate',
+  'c_middle3.l': 'leftMiddleDistal',
+  'c_ring1.l': 'leftRingProximal',
+  'c_ring2.l': 'leftRingIntermediate',
+  'c_ring3.l': 'leftRingDistal',
+  'c_pinky1.l': 'leftLittleProximal',
+  'c_pinky2.l': 'leftLittleIntermediate',
+  'c_pinky3.l': 'leftLittleDistal',
+
+  'c_thumb1.r': 'rightThumbMetacarpal',
+  'c_thumb2.r': 'rightThumbProximal',
+  'c_thumb3.r': 'rightThumbDistal',
+  'c_index1.r': 'rightIndexProximal',
+  'c_index2.r': 'rightIndexIntermediate',
+  'c_index3.r': 'rightIndexDistal',
+  'c_middle1.r': 'rightMiddleProximal',
+  'c_middle2.r': 'rightMiddleIntermediate',
+  'c_middle3.r': 'rightMiddleDistal',
+  'c_ring1.r': 'rightRingProximal',
+  'c_ring2.r': 'rightRingIntermediate',
+  'c_ring3.r': 'rightRingDistal',
+  'c_pinky1.r': 'rightLittleProximal',
+  'c_pinky2.r': 'rightLittleIntermediate',
+  'c_pinky3.r': 'rightLittleDistal',
+};
+
 function parseOptionalNumber(value, name) {
   if (value === undefined || value === null || value === '') return undefined;
   const number = Number(value);
@@ -108,6 +167,10 @@ class FBXToVRMAConverterFixed {
         aliases: ['auto'],
         mapping: MIXAMO_BONE_MAPPING,
         normalizeName: name => name && (name.startsWith('mixamorig:') ? name : `mixamorig:${name}`),
+      },
+      'mimem-unity': {
+        aliases: ['mimem_unity', 'unity-style', 'unity'],
+        mapping: MIMEM_UNITY_BONE_MAPPING,
       },
     };
     this.boneProfileName = 'auto';

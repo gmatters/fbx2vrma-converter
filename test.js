@@ -123,6 +123,61 @@ describe('generateHumanBones', () => {
     );
   });
 
+  it('should map Mimem Unity-style body and finger bones', () => {
+    const converter = createConverter();
+    converter.setBoneProfile('mimem-unity');
+    const gltfData = {
+      nodes: [
+        { name: 'root1' },
+        { name: 'spine_01.x' },
+        { name: 'spine_02.x' },
+        { name: 'spine_03.x' },
+        { name: 'neck.x' },
+        { name: 'head.x' },
+        { name: 'thigh_stretch.l' },
+        { name: 'leg_stretch.l' },
+        { name: 'foot.l' },
+        { name: 'toes_01.l' },
+        { name: 'shoulder.r' },
+        { name: 'arm_stretch.r' },
+        { name: 'forearm_stretch.r' },
+        { name: 'hand.r' },
+        { name: 'c_thumb1.l' },
+        { name: 'c_index2.r' },
+        { name: 'c_pinky3.r' },
+      ],
+    };
+
+    const bones = converter.generateHumanBones(gltfData);
+
+    assert.deepStrictEqual(bones.hips, { node: 0 });
+    assert.deepStrictEqual(bones.spine, { node: 1 });
+    assert.deepStrictEqual(bones.chest, { node: 2 });
+    assert.deepStrictEqual(bones.upperChest, { node: 3 });
+    assert.deepStrictEqual(bones.neck, { node: 4 });
+    assert.deepStrictEqual(bones.head, { node: 5 });
+    assert.deepStrictEqual(bones.leftUpperLeg, { node: 6 });
+    assert.deepStrictEqual(bones.leftLowerLeg, { node: 7 });
+    assert.deepStrictEqual(bones.leftFoot, { node: 8 });
+    assert.deepStrictEqual(bones.leftToes, { node: 9 });
+    assert.deepStrictEqual(bones.rightShoulder, { node: 10 });
+    assert.deepStrictEqual(bones.rightUpperArm, { node: 11 });
+    assert.deepStrictEqual(bones.rightLowerArm, { node: 12 });
+    assert.deepStrictEqual(bones.rightHand, { node: 13 });
+    assert.deepStrictEqual(bones.leftThumbMetacarpal, { node: 14 });
+    assert.deepStrictEqual(bones.rightIndexIntermediate, { node: 15 });
+    assert.deepStrictEqual(bones.rightLittleDistal, { node: 16 });
+  });
+
+  it('should resolve Mimem Unity-style profile aliases', () => {
+    const converter = createConverter();
+
+    converter.setBoneProfile('unity-style');
+
+    assert.equal(converter.getVRMBoneName('root1'), 'hips');
+    assert.equal(converter.getVRMBoneName('spine_01.x'), 'spine');
+  });
+
   it('should skip nodes without matching bone names', () => {
     const converter = createConverter();
     const originalWarn = console.warn;
