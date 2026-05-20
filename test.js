@@ -174,7 +174,7 @@ describe('generateHumanBones', () => {
 
     converter.setBoneProfile('unity-style');
 
-    assert.equal(converter.getVRMBoneName('root1'), 'hips');
+    assert.equal(converter.getVRMBoneName('root.x'), 'hips');
     assert.equal(converter.getVRMBoneName('spine_01.x'), 'spine');
   });
 
