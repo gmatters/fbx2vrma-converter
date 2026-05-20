@@ -31,6 +31,65 @@ const ACCESSOR_COMPONENTS = {
   MAT4: 16,
 };
 
+const MIXAMO_BONE_MAPPING = {
+  'mixamorig:Hips': 'hips',
+  'mixamorig:Spine': 'spine',
+  'mixamorig:Spine1': 'chest',
+  'mixamorig:Spine2': 'upperChest',
+  'mixamorig:Neck': 'neck',
+  'mixamorig:Head': 'head',
+  'mixamorig:LeftShoulder': 'leftShoulder',
+  'mixamorig:LeftArm': 'leftUpperArm',
+  'mixamorig:LeftForeArm': 'leftLowerArm',
+  'mixamorig:LeftHand': 'leftHand',
+  'mixamorig:RightShoulder': 'rightShoulder',
+  'mixamorig:RightArm': 'rightUpperArm',
+  'mixamorig:RightForeArm': 'rightLowerArm',
+  'mixamorig:RightHand': 'rightHand',
+  'mixamorig:LeftUpLeg': 'leftUpperLeg',
+  'mixamorig:LeftLeg': 'leftLowerLeg',
+  'mixamorig:LeftFoot': 'leftFoot',
+  'mixamorig:RightUpLeg': 'rightUpperLeg',
+  'mixamorig:RightLeg': 'rightLowerLeg',
+  'mixamorig:RightFoot': 'rightFoot',
+  'mixamorig:LeftToeBase': 'leftToes',
+  'mixamorig:RightToeBase': 'rightToes',
+
+  // Left hand finger bones (Mixamo -> VRM 1.0)
+  'mixamorig:LeftHandThumb1':  'leftThumbMetacarpal',
+  'mixamorig:LeftHandThumb2':  'leftThumbProximal',
+  'mixamorig:LeftHandThumb3':  'leftThumbDistal',
+  'mixamorig:LeftHandIndex1':  'leftIndexProximal',
+  'mixamorig:LeftHandIndex2':  'leftIndexIntermediate',
+  'mixamorig:LeftHandIndex3':  'leftIndexDistal',
+  'mixamorig:LeftHandMiddle1': 'leftMiddleProximal',
+  'mixamorig:LeftHandMiddle2': 'leftMiddleIntermediate',
+  'mixamorig:LeftHandMiddle3': 'leftMiddleDistal',
+  'mixamorig:LeftHandRing1':   'leftRingProximal',
+  'mixamorig:LeftHandRing2':   'leftRingIntermediate',
+  'mixamorig:LeftHandRing3':   'leftRingDistal',
+  'mixamorig:LeftHandPinky1':  'leftLittleProximal',
+  'mixamorig:LeftHandPinky2':  'leftLittleIntermediate',
+  'mixamorig:LeftHandPinky3':  'leftLittleDistal',
+
+  // Right hand finger bones (Mixamo -> VRM 1.0)
+  'mixamorig:RightHandThumb1':  'rightThumbMetacarpal',
+  'mixamorig:RightHandThumb2':  'rightThumbProximal',
+  'mixamorig:RightHandThumb3':  'rightThumbDistal',
+  'mixamorig:RightHandIndex1':  'rightIndexProximal',
+  'mixamorig:RightHandIndex2':  'rightIndexIntermediate',
+  'mixamorig:RightHandIndex3':  'rightIndexDistal',
+  'mixamorig:RightHandMiddle1': 'rightMiddleProximal',
+  'mixamorig:RightHandMiddle2': 'rightMiddleIntermediate',
+  'mixamorig:RightHandMiddle3': 'rightMiddleDistal',
+  'mixamorig:RightHandRing1':   'rightRingProximal',
+  'mixamorig:RightHandRing2':   'rightRingIntermediate',
+  'mixamorig:RightHandRing3':   'rightRingDistal',
+  'mixamorig:RightHandPinky1':  'rightLittleProximal',
+  'mixamorig:RightHandPinky2':  'rightLittleIntermediate',
+  'mixamorig:RightHandPinky3':  'rightLittleDistal',
+};
+
 function parseOptionalNumber(value, name) {
   if (value === undefined || value === null || value === '') return undefined;
   const number = Number(value);
@@ -44,66 +103,15 @@ class FBXToVRMAConverterFixed {
   constructor({ parse = false } = {}) {
     this.program = new Command();
     this.setupCommands(parse);
-
-    // Humanoid bone mapping (Mixamo -> VRM)
-    this.humanoidBoneMapping = {
-      'mixamorig:Hips': 'hips',
-      'mixamorig:Spine': 'spine',
-      'mixamorig:Spine1': 'chest',
-      'mixamorig:Spine2': 'upperChest',
-      'mixamorig:Neck': 'neck',
-      'mixamorig:Head': 'head',
-      'mixamorig:LeftShoulder': 'leftShoulder',
-      'mixamorig:LeftArm': 'leftUpperArm',
-      'mixamorig:LeftForeArm': 'leftLowerArm',
-      'mixamorig:LeftHand': 'leftHand',
-      'mixamorig:RightShoulder': 'rightShoulder',
-      'mixamorig:RightArm': 'rightUpperArm',
-      'mixamorig:RightForeArm': 'rightLowerArm',
-      'mixamorig:RightHand': 'rightHand',
-      'mixamorig:LeftUpLeg': 'leftUpperLeg',
-      'mixamorig:LeftLeg': 'leftLowerLeg',
-      'mixamorig:LeftFoot': 'leftFoot',
-      'mixamorig:RightUpLeg': 'rightUpperLeg',
-      'mixamorig:RightLeg': 'rightLowerLeg',
-      'mixamorig:RightFoot': 'rightFoot',
-      'mixamorig:LeftToeBase': 'leftToes',
-      'mixamorig:RightToeBase': 'rightToes',
-
-      // Left hand finger bones (Mixamo -> VRM 1.0)
-      'mixamorig:LeftHandThumb1':  'leftThumbMetacarpal',
-      'mixamorig:LeftHandThumb2':  'leftThumbProximal',
-      'mixamorig:LeftHandThumb3':  'leftThumbDistal',
-      'mixamorig:LeftHandIndex1':  'leftIndexProximal',
-      'mixamorig:LeftHandIndex2':  'leftIndexIntermediate',
-      'mixamorig:LeftHandIndex3':  'leftIndexDistal',
-      'mixamorig:LeftHandMiddle1': 'leftMiddleProximal',
-      'mixamorig:LeftHandMiddle2': 'leftMiddleIntermediate',
-      'mixamorig:LeftHandMiddle3': 'leftMiddleDistal',
-      'mixamorig:LeftHandRing1':   'leftRingProximal',
-      'mixamorig:LeftHandRing2':   'leftRingIntermediate',
-      'mixamorig:LeftHandRing3':   'leftRingDistal',
-      'mixamorig:LeftHandPinky1':  'leftLittleProximal',
-      'mixamorig:LeftHandPinky2':  'leftLittleIntermediate',
-      'mixamorig:LeftHandPinky3':  'leftLittleDistal',
-
-      // Right hand finger bones (Mixamo -> VRM 1.0)
-      'mixamorig:RightHandThumb1':  'rightThumbMetacarpal',
-      'mixamorig:RightHandThumb2':  'rightThumbProximal',
-      'mixamorig:RightHandThumb3':  'rightThumbDistal',
-      'mixamorig:RightHandIndex1':  'rightIndexProximal',
-      'mixamorig:RightHandIndex2':  'rightIndexIntermediate',
-      'mixamorig:RightHandIndex3':  'rightIndexDistal',
-      'mixamorig:RightHandMiddle1': 'rightMiddleProximal',
-      'mixamorig:RightHandMiddle2': 'rightMiddleIntermediate',
-      'mixamorig:RightHandMiddle3': 'rightMiddleDistal',
-      'mixamorig:RightHandRing1':   'rightRingProximal',
-      'mixamorig:RightHandRing2':   'rightRingIntermediate',
-      'mixamorig:RightHandRing3':   'rightRingDistal',
-      'mixamorig:RightHandPinky1':  'rightLittleProximal',
-      'mixamorig:RightHandPinky2':  'rightLittleIntermediate',
-      'mixamorig:RightHandPinky3':  'rightLittleDistal',
+    this.boneMappingProfiles = {
+      mixamo: {
+        aliases: ['auto'],
+        mapping: MIXAMO_BONE_MAPPING,
+        normalizeName: name => name && (name.startsWith('mixamorig:') ? name : `mixamorig:${name}`),
+      },
     };
+    this.boneProfileName = 'auto';
+    this.humanoidBoneMapping = MIXAMO_BONE_MAPPING;
   }
 
   setupCommands(parse) {
@@ -120,6 +128,7 @@ class FBXToVRMAConverterFixed {
       .option('--trim-in-frame <frame>', 'Trim start frame, converted to seconds using --framerate')
       .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
       .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0')
+      .option('--bone-profile <name>', 'Bone mapping profile to use', 'auto')
       .option('--dump-nodes <path>', 'Write a glTF node hierarchy and animation-target report');
 
     if (parse) {
@@ -127,7 +136,7 @@ class FBXToVRMAConverterFixed {
     }
   }
 
-  async convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}) {
+  async convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}, mappingOptions = {}) {
     // Declared outside try so it's accessible in finally
     const tempGltfPath = path.join(path.dirname(outputPath), `temp_${Date.now()}.gltf`);
     try {
@@ -143,6 +152,7 @@ class FBXToVRMAConverterFixed {
       }
 
       console.log(`Converting ${inputPath} to ${outputPath}...`);
+      this.setBoneProfile(mappingOptions.boneProfile || 'auto');
 
       // Step 1: Convert FBX to glTF (JSON + embedded)
       await this.convertFBXToGLTF(inputPath, tempGltfPath, fbx2gltfPath);
@@ -807,7 +817,36 @@ class FBXToVRMAConverterFixed {
 
   getVRMBoneName(nodeName) {
     if (!nodeName) return undefined;
-    return this.humanoidBoneMapping[nodeName] || this.humanoidBoneMapping[`mixamorig:${nodeName}`];
+    const profile = this.getBoneProfile(this.boneProfileName);
+    return this.getVRMBoneNameFromProfile(nodeName, profile);
+  }
+
+  getVRMBoneNameFromProfile(nodeName, profile) {
+    if (!nodeName || !profile) return undefined;
+    const normalizedName = profile.normalizeName ? profile.normalizeName(nodeName) : nodeName;
+    return profile.mapping[nodeName] || profile.mapping[normalizedName];
+  }
+
+  setBoneProfile(profileName = 'auto') {
+    this.boneProfileName = this.resolveBoneProfileName(profileName);
+    this.humanoidBoneMapping = this.getBoneProfile(this.boneProfileName).mapping;
+  }
+
+  resolveBoneProfileName(profileName = 'auto') {
+    if (this.boneMappingProfiles[profileName]) return profileName;
+
+    for (const [name, profile] of Object.entries(this.boneMappingProfiles)) {
+      if ((profile.aliases || []).includes(profileName)) {
+        return name;
+      }
+    }
+
+    const available = Object.keys(this.boneMappingProfiles).join(', ');
+    throw new Error(`Unknown bone profile "${profileName}". Available profiles: ${available}`);
+  }
+
+  getBoneProfile(profileName = this.boneProfileName) {
+    return this.boneMappingProfiles[this.resolveBoneProfileName(profileName)];
   }
 
   async saveAsGLB(vrmaData, outputPath) {
@@ -862,7 +901,7 @@ class FBXToVRMAConverterFixed {
     console.log(`Saved GLB: ${totalLength} bytes (JSON: ${jsonPadded}, BIN: ${binPadded})`);
   }
 
-  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}) {
+  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}, mappingOptions = {}) {
     const entries = await fs.readdir(inputDir);
     const fbxFiles = entries.filter(f => path.extname(f).toLowerCase() === '.fbx');
 
@@ -887,7 +926,7 @@ class FBXToVRMAConverterFixed {
           : debugOptions.dumpNodes;
         fileDebugOptions.dumpNodes = `${dumpBase}_${path.basename(file, path.extname(file))}${dumpExt || '.txt'}`;
       }
-      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions, fileDebugOptions);
+      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions, fileDebugOptions, mappingOptions);
       if (ok) successCount++;
     }
 
@@ -945,6 +984,9 @@ class FBXToVRMAConverterFixed {
     const debugOptions = {
       dumpNodes: options.dumpNodes,
     };
+    const mappingOptions = {
+      boneProfile: options.boneProfile,
+    };
 
     let success;
     if (inputStat?.isDirectory()) {
@@ -956,7 +998,8 @@ class FBXToVRMAConverterFixed {
         options.fbx2gltf,
         options.framerate,
         trimOptions,
-        debugOptions
+        debugOptions,
+        mappingOptions
       );
     } else {
       // Single file conversion mode
@@ -967,7 +1010,8 @@ class FBXToVRMAConverterFixed {
         options.fbx2gltf,
         options.framerate,
         trimOptions,
-        debugOptions
+        debugOptions,
+        mappingOptions
       );
     }
     process.exit(success ? 0 : 1);

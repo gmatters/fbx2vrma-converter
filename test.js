@@ -104,6 +104,25 @@ describe('generateHumanBones', () => {
     });
   });
 
+  it('should support explicit and alias bone mapping profiles', () => {
+    const converter = createConverter();
+
+    converter.setBoneProfile('mixamo');
+    assert.equal(converter.getVRMBoneName('Hips'), 'hips');
+
+    converter.setBoneProfile('auto');
+    assert.equal(converter.getVRMBoneName('mixamorig:Head'), 'head');
+  });
+
+  it('should reject unknown bone mapping profiles', () => {
+    const converter = createConverter();
+
+    assert.throws(
+      () => converter.setBoneProfile('unknown-profile'),
+      /Unknown bone profile/
+    );
+  });
+
   it('should skip nodes without matching bone names', () => {
     const converter = createConverter();
     const originalWarn = console.warn;
