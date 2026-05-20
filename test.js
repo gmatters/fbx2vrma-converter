@@ -185,6 +185,34 @@ describe('generateHumanBones', () => {
   });
 });
 
+describe('formatNodeDump', () => {
+  it('should include hierarchy, mapping, animation targets, and transforms', () => {
+    const converter = createConverter();
+    const gltfData = {
+      nodes: [
+        { name: 'Root', children: [1] },
+        { name: 'Hips', children: [2], translation: [0, 1, 0] },
+        { name: 'Spine', rotation: [0, 0, 0, 1], mesh: 0, skin: 0 },
+      ],
+      animations: [{
+        name: 'Walk',
+        channels: [
+          { target: { node: 1, path: 'translation' } },
+          { target: { node: 2, path: 'rotation' } },
+        ],
+      }],
+    };
+
+    const dump = converter.formatNodeDump(gltfData);
+
+    assert.match(dump, /Node count: 3/);
+    assert.match(dump, /\[1\] Hips/);
+    assert.match(dump, /parent: 0; children: 2; mapped: hips; animated: Walk:translation; transforms: T/);
+    assert.match(dump, /\[2\] Spine/);
+    assert.match(dump, /mapped: spine; animated: Walk:rotation; transforms: R; mesh: 0; skin: 0/);
+  });
+});
+
 describe('trimAnimationData', () => {
   it('should trim sampler data and shift the in point to time zero', () => {
     const converter = createConverter();

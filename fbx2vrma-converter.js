@@ -119,14 +119,15 @@ class FBXToVRMAConverterFixed {
       .option('--trim-out <seconds>', 'Trim end time in seconds')
       .option('--trim-in-frame <frame>', 'Trim start frame, converted to seconds using --framerate')
       .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
-      .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0');
+      .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0')
+      .option('--dump-nodes <path>', 'Write a glTF node hierarchy and animation-target report');
 
     if (parse) {
       this.program.parse();
     }
   }
 
-  async convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions = {}) {
+  async convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}) {
     // Declared outside try so it's accessible in finally
     const tempGltfPath = path.join(path.dirname(outputPath), `temp_${Date.now()}.gltf`);
     try {
@@ -148,6 +149,10 @@ class FBXToVRMAConverterFixed {
 
       // Step 2: Load glTF file
       const gltfData = await fs.readJson(tempGltfPath);
+
+      if (debugOptions.dumpNodes) {
+        await this.dumpNodes(gltfData, debugOptions.dumpNodes);
+      }
 
       // Step 3: Embed binary data
       const embeddedGltfData = await this.embedBinaryData(gltfData, path.dirname(tempGltfPath));
@@ -304,6 +309,71 @@ class FBXToVRMAConverterFixed {
     }
 
     return gltfData;
+  }
+
+  async dumpNodes(gltfData, outputPath) {
+    const report = this.formatNodeDump(gltfData);
+    await fs.outputFile(outputPath, report);
+    console.log(`Wrote node dump: ${outputPath}`);
+  }
+
+  formatNodeDump(gltfData) {
+    const nodes = gltfData.nodes || [];
+    const parents = new Map();
+    nodes.forEach((node, index) => {
+      (node.children || []).forEach(childIndex => parents.set(childIndex, index));
+    });
+
+    const animatedPaths = new Map();
+    (gltfData.animations || []).forEach((animation, animationIndex) => {
+      (animation.channels || []).forEach(channel => {
+        const nodeIndex = channel.target?.node;
+        if (nodeIndex === undefined) return;
+        if (!animatedPaths.has(nodeIndex)) animatedPaths.set(nodeIndex, []);
+        animatedPaths.get(nodeIndex).push(`${animation.name || `Animation${animationIndex}`}:${channel.target?.path || 'unknown'}`);
+      });
+    });
+
+    const roots = nodes
+      .map((_, index) => index)
+      .filter(index => !parents.has(index));
+    const lines = [
+      `Node count: ${nodes.length}`,
+      `Scene roots: ${roots.join(', ') || '(none)'}`,
+      '',
+    ];
+
+    const writeNode = (index, depth = 0) => {
+      const node = nodes[index];
+      if (!node) return;
+      const indent = '  '.repeat(depth);
+      const parentIndex = parents.has(index) ? parents.get(index) : 'none';
+      const mappedBone = this.getVRMBoneName(node.name) || 'unmapped';
+      const animated = animatedPaths.get(index)?.join(', ') || 'no';
+      const transformFlags = [
+        node.translation ? 'T' : null,
+        node.rotation ? 'R' : null,
+        node.scale ? 'S' : null,
+        node.matrix ? 'M' : null,
+      ].filter(Boolean).join('') || 'none';
+      const childList = (node.children || []).join(', ') || 'none';
+
+      lines.push(`${indent}[${index}] ${node.name || '(unnamed)'}`);
+      lines.push(`${indent}  parent: ${parentIndex}; children: ${childList}; mapped: ${mappedBone}; animated: ${animated}; transforms: ${transformFlags}; mesh: ${node.mesh ?? 'none'}; skin: ${node.skin ?? 'none'}`);
+      (node.children || []).forEach(childIndex => writeNode(childIndex, depth + 1));
+    };
+
+    roots.forEach(rootIndex => writeNode(rootIndex));
+
+    const unreachable = nodes
+      .map((_, index) => index)
+      .filter(index => !roots.includes(index) && !parents.has(index));
+    if (unreachable.length > 0) {
+      lines.push('');
+      lines.push(`Unreachable/non-parented nodes: ${unreachable.join(', ')}`);
+    }
+
+    return `${lines.join('\n')}\n`;
   }
 
   trimAnimationData(gltfData, options = {}) {
@@ -792,7 +862,7 @@ class FBXToVRMAConverterFixed {
     console.log(`Saved GLB: ${totalLength} bytes (JSON: ${jsonPadded}, BIN: ${binPadded})`);
   }
 
-  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate, trimOptions = {}) {
+  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}) {
     const entries = await fs.readdir(inputDir);
     const fbxFiles = entries.filter(f => path.extname(f).toLowerCase() === '.fbx');
 
@@ -809,7 +879,15 @@ class FBXToVRMAConverterFixed {
       const inputPath  = path.join(inputDir, file);
       const outputPath = path.join(outputDir, path.basename(file, path.extname(file)) + '.vrma');
       console.log(`\n[${successCount + 1}/${fbxFiles.length}] ${file}`);
-      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions);
+      const fileDebugOptions = { ...debugOptions };
+      if (debugOptions.dumpNodes) {
+        const dumpExt = path.extname(debugOptions.dumpNodes);
+        const dumpBase = dumpExt
+          ? debugOptions.dumpNodes.slice(0, -dumpExt.length)
+          : debugOptions.dumpNodes;
+        fileDebugOptions.dumpNodes = `${dumpBase}_${path.basename(file, path.extname(file))}${dumpExt || '.txt'}`;
+      }
+      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions, fileDebugOptions);
       if (ok) successCount++;
     }
 
@@ -864,6 +942,9 @@ class FBXToVRMAConverterFixed {
       loopSmoothing: options.loopSmoothing,
       framerate: options.framerate,
     };
+    const debugOptions = {
+      dumpNodes: options.dumpNodes,
+    };
 
     let success;
     if (inputStat?.isDirectory()) {
@@ -874,7 +955,8 @@ class FBXToVRMAConverterFixed {
         outputDir,
         options.fbx2gltf,
         options.framerate,
-        trimOptions
+        trimOptions,
+        debugOptions
       );
     } else {
       // Single file conversion mode
@@ -884,7 +966,8 @@ class FBXToVRMAConverterFixed {
         outputPath,
         options.fbx2gltf,
         options.framerate,
-        trimOptions
+        trimOptions,
+        debugOptions
       );
     }
     process.exit(success ? 0 : 1);

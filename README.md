@@ -117,8 +117,17 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `--trim-in-frame <frame>` | Trim start frame, converted with `--framerate` | — |
 | `--trim-out-frame <frame>` | Trim end frame, converted with `--framerate`; exact out pose is excluded | — |
 | `--loop-smoothing <seconds>` | Blend tail samples toward the first pose over this duration | `0` |
+| `--dump-nodes <path>` | Write a glTF node hierarchy and animation-target report for mapping debug | — |
 | `-V, --version` | Show version | — |
 | `-h, --help` | Show help | — |
+
+### Debugging bone mappings
+
+Use `--dump-nodes` to inspect every glTF node after FBX2glTF conversion. The report includes node index, name, parent, children, mapped VRM bone, animation channels, transform fields, mesh, and skin.
+
+```bash
+node fbx2vrma-converter.js -i input.fbx --dump-nodes nodes.txt
+```
 
 ## How it works
 
