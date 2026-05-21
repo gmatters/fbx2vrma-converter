@@ -118,6 +118,7 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `--trim-out-frame <frame>` | Trim end frame, converted with `--framerate`; exact out pose is excluded | — |
 | `--loop-smoothing <seconds>` | Blend tail samples toward the first pose over this duration | `0` |
 | `--bone-profile <name>` | Bone mapping profile to use | `auto` |
+| `--apply-corrections <path>` | Apply rest-pose correction JSON to matching humanoid rotation channels | — |
 | `--dump-nodes <path>` | Write a glTF node hierarchy and animation-target report for mapping debug | — |
 | `-V, --version` | Show version | — |
 | `-h, --help` | Show help | — |
@@ -134,6 +135,14 @@ Use `--dump-nodes` to inspect every glTF node after FBX2glTF conversion. The rep
 ```bash
 node fbx2vrma-converter.js -i input.fbx --dump-nodes nodes.txt
 ```
+
+Apply a reviewed correction JSON during conversion. The file can either contain a `corrections` array or a per-VRM-bone `bones` object such as `vrm_bone_rotation_offsets.example.json` or `vrm_bone_euler_offsets.example.json`.
+
+```bash
+node fbx2vrma-converter.js -i input.fbx -o output.vrma --bone-profile mimem-unity --apply-corrections corrections.json
+```
+
+Per-bone `bones` configs support `"rotationFormat": "quaternion_xyzw"`, `"quaternion_wxyz"`, or `"euler_xyz_degrees"`. Euler entries are `[xDegrees, yDegrees, zDegrees]`. Set `"invert": true` or `"application": "inversePostMultiplyAnimation"` to apply the inverse of the listed rotations.
 
 ## How it works
 

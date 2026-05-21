@@ -500,6 +500,166 @@ describe('processAnimationsWithTiming', () => {
   });
 });
 
+describe('applyCorrectionData', () => {
+  it('should apply correction JSON entries to matching humanoid rotation channels', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0], [[0, 0, 0, 1]], 'VEC4');
+    gltfData.nodes = [{ name: 'arm_stretch.l' }];
+    gltfData.animations[0].channels[0].target = { node: 0, path: 'rotation' };
+    const correction = converter.quaternionFromAxisAngle([1, 0, 0], -45);
+
+    converter.applyCorrectionData(gltfData, { leftUpperArm: { node: 0 } }, {
+      corrections: [{
+        vrmBone: 'leftUpperArm',
+        localPostCorrectionQuaternion: correction,
+      }],
+    });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const rotations = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.ok(rotations[0][0] < -0.38 && rotations[0][0] > -0.39);
+    assert.ok(rotations[0][3] > 0.92 && rotations[0][3] < 0.93);
+  });
+
+  it('should apply WXYZ bone rotation offset config entries by VRM bone name', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0], [[0, 0, 0, 1]], 'VEC4');
+    gltfData.nodes = [{ name: 'arm_stretch.l' }];
+    gltfData.animations[0].channels[0].target = { node: 0, path: 'rotation' };
+    const xyzw = converter.quaternionFromAxisAngle([1, 0, 0], -45);
+    const wxyz = [xyzw[3], xyzw[0], xyzw[1], xyzw[2]];
+
+    converter.applyCorrectionData(gltfData, { leftUpperArm: { node: 0 } }, {
+      rotationFormat: 'quaternion_wxyz',
+      bones: {
+        hips: null,
+        leftUpperArm: wxyz,
+      },
+    });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const rotations = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.ok(rotations[0][0] < -0.38 && rotations[0][0] > -0.39);
+    assert.ok(rotations[0][3] > 0.92 && rotations[0][3] < 0.93);
+  });
+
+  it('should apply Euler XYZ degree bone rotation offset config entries', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0], [[0, 0, 0, 1]], 'VEC4');
+    gltfData.nodes = [{ name: 'arm_stretch.l' }];
+    gltfData.animations[0].channels[0].target = { node: 0, path: 'rotation' };
+
+    converter.applyCorrectionData(gltfData, { leftUpperArm: { node: 0 } }, {
+      rotationFormat: 'euler_xyz_degrees',
+      bones: {
+        leftUpperArm: [-45, 0, 0],
+      },
+    });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const rotations = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.ok(rotations[0][0] < -0.38 && rotations[0][0] > -0.39);
+    assert.ok(rotations[0][3] > 0.92 && rotations[0][3] < 0.93);
+  });
+
+  it('should invert WXYZ bone rotation offset config entries when requested', () => {
+    const converter = createConverter();
+    const xyzw = converter.quaternionFromAxisAngle([1, 0, 0], -45);
+    const wxyz = [xyzw[3], xyzw[0], xyzw[1], xyzw[2]];
+
+    const correctionMap = converter.buildCorrectionMap({
+      rotationFormat: 'quaternion_wxyz',
+      invert: true,
+      bones: {
+        leftUpperArm: wxyz,
+      },
+    });
+    const correction = correctionMap.get('leftUpperArm');
+
+    assert.ok(correction[0] > 0.38 && correction[0] < 0.39);
+    assert.ok(correction[3] > 0.92 && correction[3] < 0.93);
+  });
+
+  it('should reject malformed bone rotation offset config entries', () => {
+    const converter = createConverter();
+
+    assert.throws(
+      () => converter.buildCorrectionMap({ bones: { leftUpperArm: [1, 2, 3] } }),
+      /Quaternion bone offset/
+    );
+    assert.throws(
+      () => converter.buildCorrectionMap({ rotationFormat: 'euler_xyz_degrees', bones: { leftUpperArm: [1, 2, 3, 4] } }),
+      /Euler bone offset/
+    );
+  });
+
+  it('should apply path-keyed pose corrections to matching rotation channels', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0], [[0, 0, 0, 1]], 'VEC4');
+    gltfData.nodes = [
+      { name: 'root1', children: [1] },
+      { name: 'root.x', children: [2] },
+      { name: 'arm_stretch.r' },
+    ];
+    gltfData.animations[0].channels[0].target = { node: 2, path: 'rotation' };
+    const correction = converter.quaternionFromAxisAngle([1, 0, 0], -45);
+
+    converter.applyCorrectionData(gltfData, {}, {
+      corrections: [{
+        hierarchyPath: 'root1/root.x/arm_stretch.r',
+        localPostCorrectionQuaternion: correction,
+      }],
+    });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const rotations = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.ok(rotations[0][0] < -0.38 && rotations[0][0] > -0.39);
+  });
+
+  it('should apply path-keyed corrections when glTF has an extra root prefix', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0], [[0, 0, 0, 1]], 'VEC4');
+    gltfData.nodes = [
+      { name: 'RootNode', children: [1] },
+      { name: 'root1', children: [2] },
+      { name: 'root.x', children: [3] },
+      { name: 'arm_stretch.r' },
+    ];
+    gltfData.animations[0].channels[0].target = { node: 3, path: 'rotation' };
+    const correction = converter.quaternionFromAxisAngle([1, 0, 0], -45);
+
+    converter.applyCorrectionData(gltfData, {}, {
+      corrections: [{
+        hierarchyPath: 'root1/root.x/arm_stretch.r',
+        localPostCorrectionQuaternion: correction,
+      }],
+    });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const rotations = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.ok(rotations[0][0] < -0.38 && rotations[0][0] > -0.39);
+  });
+
+  it('should reject malformed correction JSON entries', () => {
+    const converter = createConverter();
+
+    assert.throws(
+      () => converter.buildCorrectionMap({ corrections: [{ vrmBone: 'leftUpperArm' }] }),
+      /localPostCorrectionQuaternion/
+    );
+  });
+});
+
 describe('convertToVRMAWithTiming', () => {
   it('should produce valid VRMA structure', () => {
     const converter = createConverter();

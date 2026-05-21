@@ -192,6 +192,7 @@ class FBXToVRMAConverterFixed {
       .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
       .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0')
       .option('--bone-profile <name>', 'Bone mapping profile to use', 'auto')
+      .option('--apply-corrections <path>', 'Apply rest-pose correction JSON to matching humanoid rotation channels')
       .option('--dump-nodes <path>', 'Write a glTF node hierarchy and animation-target report');
 
     if (parse) {
@@ -216,6 +217,7 @@ class FBXToVRMAConverterFixed {
 
       console.log(`Converting ${inputPath} to ${outputPath}...`);
       this.setBoneProfile(mappingOptions.boneProfile || 'auto');
+      const correctionData = await this.loadCorrectionData(mappingOptions);
 
       // Step 1: Convert FBX to glTF (JSON + embedded)
       await this.convertFBXToGLTF(inputPath, tempGltfPath, fbx2gltfPath);
@@ -237,7 +239,7 @@ class FBXToVRMAConverterFixed {
       const enhancedGltfData = this.enhanceAnimationTiming(trimmedGltfData, parseInt(framerate));
 
       // Step 6: Convert to VRMA format
-      const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData);
+      const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData, { correctionData });
 
       // Step 7: Save VRMA as GLB binary
       await this.saveAsGLB(vrmaData, outputPath);
@@ -725,7 +727,7 @@ class FBXToVRMAConverterFixed {
     return accessorIndex;
   }
 
-  convertToVRMAWithTiming(gltfData) {
+  convertToVRMAWithTiming(gltfData, options = {}) {
     console.log('Converting to VRMA with enhanced timing...');
 
     // Retrieve animation duration from metadata
@@ -741,6 +743,9 @@ class FBXToVRMAConverterFixed {
     const boneCount = Object.keys(humanBones).length;
     if (boneCount === 0) {
       throw new Error('No humanoid bones matched. Check input skeleton bone names or add mappings before converting to VRMA.');
+    }
+    if (options.correctionData) {
+      this.applyCorrectionData(gltfData, humanBones, options.correctionData);
     }
     const metadata = gltfData.extras?.animationMetadata;
     const vrmaData = {
@@ -838,6 +843,220 @@ class FBXToVRMAConverterFixed {
         samplers: filteredSamplers,
       };
     });
+  }
+
+  applyCorrectionData(gltfData, humanBones, correctionData) {
+    const correctionMap = this.buildCorrectionMap(correctionData);
+    if (correctionMap.size === 0) {
+      console.log('No correction entries found to apply');
+      return;
+    }
+    this.applyRotationCorrectionMap(gltfData, humanBones, correctionMap, 'correction file');
+  }
+
+  async loadCorrectionData(mappingOptions = {}) {
+    return mappingOptions.applyCorrections
+      ? await fs.readJson(mappingOptions.applyCorrections)
+      : null;
+  }
+
+  buildCorrectionMap(correctionData) {
+    if (correctionData?.bones && typeof correctionData.bones === 'object') {
+      return this.buildBoneRotationOffsetMap(correctionData);
+    }
+
+    const entries = Array.isArray(correctionData)
+      ? correctionData
+      : correctionData?.corrections;
+    if (!Array.isArray(entries)) {
+      throw new Error('Correction JSON must contain a corrections array');
+    }
+
+    const correctionMap = new Map();
+    for (const entry of entries) {
+      const correctionKey = entry?.vrmBone || entry?.hierarchyPath || entry?.nodeName;
+      if (!correctionKey) continue;
+      const quaternion = entry.localPostCorrectionQuaternion;
+      if (!Array.isArray(quaternion) || quaternion.length !== 4 || quaternion.some(value => !Number.isFinite(value))) {
+        throw new Error(`Correction for ${correctionKey} must include localPostCorrectionQuaternion with 4 numbers`);
+      }
+      correctionMap.set(correctionKey, this.normalizeQuat(quaternion));
+    }
+    return correctionMap;
+  }
+
+  buildBoneRotationOffsetMap(correctionData) {
+    const rotationFormat = correctionData.rotationFormat || 'quaternion_xyzw';
+    if (!['quaternion_xyzw', 'quaternion_wxyz', 'euler_xyz_degrees'].includes(rotationFormat)) {
+      throw new Error(`Unsupported rotationFormat for bones config: ${rotationFormat}`);
+    }
+    const invert = correctionData.invert === true || correctionData.application === 'inversePostMultiplyAnimation';
+
+    const correctionMap = new Map();
+    for (const [vrmBone, value] of Object.entries(correctionData.bones)) {
+      if (value === null || value === undefined) continue;
+      if (!Array.isArray(value) || value.some(item => !Number.isFinite(item))) {
+        throw new Error(`Bone offset for ${vrmBone} must be null or a numeric array`);
+      }
+      const quaternion = this.parseBoneRotationOffset(vrmBone, value, rotationFormat);
+      const normalized = this.normalizeQuat(quaternion);
+      correctionMap.set(vrmBone, invert ? this.invertQuaternion(normalized) : normalized);
+    }
+    return correctionMap;
+  }
+
+  parseBoneRotationOffset(vrmBone, value, rotationFormat) {
+    if (rotationFormat === 'euler_xyz_degrees') {
+      if (value.length !== 3) {
+        throw new Error(`Euler bone offset for ${vrmBone} must have 3 numbers`);
+      }
+      return this.quaternionFromEulerXYZDegrees(value);
+    }
+    if (value.length !== 4) {
+      throw new Error(`Quaternion bone offset for ${vrmBone} must have 4 numbers`);
+    }
+    return rotationFormat === 'quaternion_wxyz'
+      ? [value[1], value[2], value[3], value[0]]
+      : value;
+  }
+
+  applyRotationCorrectionMap(gltfData, humanBones, correctionMap, label) {
+    if (!gltfData.animations?.length || !gltfData.buffers?.length) return;
+
+    const nodeCorrections = new Map();
+    const pathToNode = this.getNodePathMap(gltfData);
+    const nameToNodes = this.getNodeNameMap(gltfData);
+    const unmatchedKeys = [];
+    for (const [correctionKey, correction] of correctionMap.entries()) {
+      const node = humanBones[correctionKey]?.node
+        ?? this.resolveNodeByPath(correctionKey, pathToNode)
+        ?? (nameToNodes.get(correctionKey)?.length === 1 ? nameToNodes.get(correctionKey)[0] : undefined);
+      if (node !== undefined) {
+        nodeCorrections.set(node, { correctionKey, correction });
+      } else {
+        unmatchedKeys.push(correctionKey);
+      }
+    }
+    if (nodeCorrections.size === 0) {
+      console.log(`No mapped bones found for ${label}`);
+      return;
+    }
+    if (unmatchedKeys.length > 0) {
+      console.warn(`Skipped ${unmatchedKeys.length} unmatched correction key(s): ${unmatchedKeys.slice(0, 10).join(', ')}${unmatchedKeys.length > 10 ? ', ...' : ''}`);
+    }
+
+    const buffers = this.decodeBuffers(gltfData);
+    let correctedSamplerCount = 0;
+    const correctedBones = new Set();
+
+    for (const animation of gltfData.animations) {
+      for (const channel of animation.channels || []) {
+        const nodeCorrection = nodeCorrections.get(channel.target?.node);
+        if (channel.target?.path !== 'rotation' || !nodeCorrection) {
+          continue;
+        }
+
+        const sampler = animation.samplers?.[channel.sampler];
+        const accessor = gltfData.accessors?.[sampler?.output];
+        if (!sampler || !accessor || accessor.type !== 'VEC4') {
+          continue;
+        }
+
+        const rotations = this.readAccessorElements(gltfData, buffers, sampler.output);
+        const correctedRotations = rotations.map(rotation => (
+          this.normalizeQuat(this.multiplyQuaternions(rotation, nodeCorrection.correction))
+        ));
+        sampler.output = this.appendAccessorData(gltfData, buffers, correctedRotations, {
+          type: accessor.type,
+          componentType: accessor.componentType,
+        });
+        correctedSamplerCount++;
+        correctedBones.add(nodeCorrection.correctionKey);
+      }
+    }
+
+    if (correctedSamplerCount > 0) {
+      this.encodeBuffers(gltfData, buffers);
+      console.log(`Applied ${label} to ${correctedSamplerCount} rotation sampler(s): ${[...correctedBones].join(', ')}`);
+    }
+  }
+
+  getNodePathMap(gltfData) {
+    const nodes = gltfData.nodes || [];
+    const pathMap = new Map();
+    const visit = (nodeIndex, currentPath) => {
+      const node = nodes[nodeIndex];
+      if (!node) return;
+      const pathValue = currentPath ? `${currentPath}/${node.name || `(unnamed-${nodeIndex})`}` : (node.name || `(unnamed-${nodeIndex})`);
+      pathMap.set(pathValue, nodeIndex);
+      (node.children || []).forEach(childIndex => visit(childIndex, pathValue));
+    };
+    const childNodes = new Set();
+    nodes.forEach(node => (node.children || []).forEach(childIndex => childNodes.add(childIndex)));
+    nodes.forEach((_, index) => {
+      if (!childNodes.has(index)) visit(index, '');
+    });
+    return pathMap;
+  }
+
+  resolveNodeByPath(correctionPath, pathToNode) {
+    if (pathToNode.has(correctionPath)) {
+      return pathToNode.get(correctionPath);
+    }
+
+    const suffix = `/${correctionPath}`;
+    const matches = [...pathToNode.entries()]
+      .filter(([nodePath]) => nodePath.endsWith(suffix))
+      .map(([, nodeIndex]) => nodeIndex);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  getNodeNameMap(gltfData) {
+    const nameMap = new Map();
+    (gltfData.nodes || []).forEach((node, index) => {
+      if (!node.name) return;
+      if (!nameMap.has(node.name)) nameMap.set(node.name, []);
+      nameMap.get(node.name).push(index);
+    });
+    return nameMap;
+  }
+
+  quaternionFromAxisAngle(axis, degrees) {
+    const radians = degrees * Math.PI / 180;
+    const half = radians / 2;
+    const sin = Math.sin(half);
+    return this.normalizeQuat([
+      axis[0] * sin,
+      axis[1] * sin,
+      axis[2] * sin,
+      Math.cos(half),
+    ]);
+  }
+
+  quaternionFromEulerXYZDegrees(eulerDegrees) {
+    const [xDegrees, yDegrees, zDegrees] = eulerDegrees;
+    const qx = this.quaternionFromAxisAngle([1, 0, 0], xDegrees);
+    const qy = this.quaternionFromAxisAngle([0, 1, 0], yDegrees);
+    const qz = this.quaternionFromAxisAngle([0, 0, 1], zDegrees);
+    return this.normalizeQuat(this.multiplyQuaternions(this.multiplyQuaternions(qx, qy), qz));
+  }
+
+  multiplyQuaternions(a, b) {
+    const [ax, ay, az, aw] = a;
+    const [bx, by, bz, bw] = b;
+    return [
+      aw * bx + ax * bw + ay * bz - az * by,
+      aw * by - ax * bz + ay * bw + az * bx,
+      aw * bz + ax * by - ay * bx + az * bw,
+      aw * bw - ax * bx - ay * by - az * bz,
+    ];
+  }
+
+  invertQuaternion(quaternion) {
+    const [x, y, z, w] = quaternion;
+    const lengthSquared = x * x + y * y + z * z + w * w;
+    if (lengthSquared === 0) return [0, 0, 0, 1];
+    return [-x / lengthSquared, -y / lengthSquared, -z / lengthSquared, w / lengthSquared];
   }
 
   generateHumanBones(gltfData) {
@@ -983,11 +1202,7 @@ class FBXToVRMAConverterFixed {
       console.log(`\n[${successCount + 1}/${fbxFiles.length}] ${file}`);
       const fileDebugOptions = { ...debugOptions };
       if (debugOptions.dumpNodes) {
-        const dumpExt = path.extname(debugOptions.dumpNodes);
-        const dumpBase = dumpExt
-          ? debugOptions.dumpNodes.slice(0, -dumpExt.length)
-          : debugOptions.dumpNodes;
-        fileDebugOptions.dumpNodes = `${dumpBase}_${path.basename(file, path.extname(file))}${dumpExt || '.txt'}`;
+        fileDebugOptions.dumpNodes = this.resolveBatchDebugOutputPath(debugOptions.dumpNodes, file, '.txt');
       }
       const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions, fileDebugOptions, mappingOptions);
       if (ok) successCount++;
@@ -1008,6 +1223,14 @@ class FBXToVRMAConverterFixed {
         await fs.remove(binPath);
       }
     }
+  }
+
+  resolveBatchDebugOutputPath(outputPath, inputFile, defaultExt) {
+    const dumpExt = path.extname(outputPath);
+    const dumpBase = dumpExt
+      ? outputPath.slice(0, -dumpExt.length)
+      : outputPath;
+    return `${dumpBase}_${path.basename(inputFile, path.extname(inputFile))}${dumpExt || defaultExt}`;
   }
 
   async resolveOutputPath(inputPath, outputOption) {
@@ -1049,6 +1272,7 @@ class FBXToVRMAConverterFixed {
     };
     const mappingOptions = {
       boneProfile: options.boneProfile,
+      applyCorrections: options.applyCorrections,
     };
 
     let success;
