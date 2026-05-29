@@ -194,6 +194,7 @@ class FBXToVRMAConverterFixed {
       .option('--no-shift-hip-origin', 'Disable shifting hip translation X/Z so the animation starts at the origin')
       .option('--bone-profile <name>', 'Bone mapping profile to use', 'auto')
       .option('--apply-corrections <path>', 'Apply rest-pose correction JSON to matching humanoid rotation channels')
+      .option('--apply-rest-pose <path>', 'Apply static humanoid node rotations from a rest-pose JSON profile')
       .option('--dump-nodes <path>', 'Write a glTF node hierarchy and animation-target report');
 
     if (parse) {
@@ -219,6 +220,7 @@ class FBXToVRMAConverterFixed {
       console.log(`Converting ${inputPath} to ${outputPath}...`);
       this.setBoneProfile(mappingOptions.boneProfile || 'auto');
       const correctionData = await this.loadCorrectionData(mappingOptions);
+      const restPoseData = await this.loadRestPoseData(mappingOptions);
 
       // Step 1: Convert FBX to glTF (JSON + embedded)
       await this.convertFBXToGLTF(inputPath, tempGltfPath, fbx2gltfPath);
@@ -246,7 +248,7 @@ class FBXToVRMAConverterFixed {
       const enhancedGltfData = this.enhanceAnimationTiming(originShiftedGltfData, parseInt(framerate));
 
       // Step 7: Convert to VRMA format
-      const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData, { correctionData });
+      const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData, { correctionData, restPoseData });
 
       // Step 8: Save VRMA as GLB binary
       await this.saveAsGLB(vrmaData, outputPath);
@@ -814,17 +816,15 @@ class FBXToVRMAConverterFixed {
     if (options.correctionData) {
       this.applyCorrectionData(gltfData, humanBones, options.correctionData);
     }
+    if (options.restPoseData) {
+      this.applyRestPoseData(gltfData, humanBones, options.restPoseData);
+    }
     const metadata = gltfData.extras?.animationMetadata;
     const vrmaData = {
       asset: gltfData.asset,
       scene: gltfData.scene,
       scenes: gltfData.scenes,
-      // Strip mesh/skin references: if meshes/skins are omitted from output,
-      // leftover node indices cause GLTFLoader to resolve undefined,
-      // resulting in an isSkinnedMesh error.
-      // Also strip scale: VRMA rest pose is defined by translation only
-      // (matching VRoid Studio output format).
-      nodes: gltfData.nodes?.map(({ mesh, skin, scale, ...rest }) => rest),
+      nodes: gltfData.nodes?.map(node => this.stripNodeForVRMA(node)),
       animations: this.processAnimationsWithTiming(gltfData.animations, animationDuration, humanBones),
       accessors: gltfData.accessors,
       bufferViews: gltfData.bufferViews,
@@ -849,6 +849,16 @@ class FBXToVRMAConverterFixed {
     console.log(`Generated VRMA with ${boneCount} bones and ${animationDuration}s duration`);
 
     return vrmaData;
+  }
+
+  stripNodeForVRMA(node) {
+    const stripped = {};
+    for (const key of ['name', 'children', 'translation', 'rotation']) {
+      if (node[key] !== undefined) {
+        stripped[key] = node[key];
+      }
+    }
+    return stripped;
   }
 
   processAnimationsWithTiming(animations, duration, humanBones = {}) {
@@ -925,6 +935,67 @@ class FBXToVRMAConverterFixed {
     return mappingOptions.applyCorrections
       ? await fs.readJson(mappingOptions.applyCorrections)
       : null;
+  }
+
+  async loadRestPoseData(mappingOptions = {}) {
+    return mappingOptions.applyRestPose
+      ? await fs.readJson(mappingOptions.applyRestPose)
+      : null;
+  }
+
+  applyRestPoseData(gltfData, humanBones, restPoseData) {
+    const rotationMap = this.buildRestPoseRotationMap(restPoseData);
+    if (rotationMap.size === 0) {
+      console.log('No rest-pose entries found to apply');
+      return;
+    }
+
+    let appliedCount = 0;
+    const unmatchedKeys = [];
+    for (const [vrmBone, rotation] of rotationMap.entries()) {
+      const nodeIndex = humanBones[vrmBone]?.node;
+      const node = nodeIndex !== undefined ? gltfData.nodes?.[nodeIndex] : undefined;
+      if (!node) {
+        unmatchedKeys.push(vrmBone);
+        continue;
+      }
+      node.rotation = rotation;
+      appliedCount++;
+    }
+
+    if (unmatchedKeys.length > 0) {
+      console.warn(`Skipped ${unmatchedKeys.length} unmatched rest-pose bone(s): ${unmatchedKeys.slice(0, 10).join(', ')}${unmatchedKeys.length > 10 ? ', ...' : ''}`);
+    }
+    if (appliedCount > 0) {
+      console.log(`Applied rest-pose rotations to ${appliedCount} humanoid node(s)`);
+    } else {
+      console.log('No mapped bones found for rest-pose profile');
+    }
+  }
+
+  buildRestPoseRotationMap(restPoseData) {
+    if (!restPoseData?.bones || typeof restPoseData.bones !== 'object') {
+      throw new Error('Rest-pose JSON must contain a bones object');
+    }
+
+    const rotationFormat = restPoseData.rotationFormat || 'quaternion_xyzw';
+    if (!['quaternion_xyzw', 'quaternion_wxyz'].includes(rotationFormat)) {
+      throw new Error(`Unsupported rotationFormat for rest-pose profile: ${rotationFormat}`);
+    }
+
+    const rotationMap = new Map();
+    for (const [vrmBone, entry] of Object.entries(restPoseData.bones)) {
+      if (entry === null || entry === undefined) continue;
+      const value = Array.isArray(entry) ? entry : entry.rotation;
+      if (!Array.isArray(value) || value.length !== 4 || value.some(item => !Number.isFinite(item))) {
+        throw new Error(`Rest-pose rotation for ${vrmBone} must be a quaternion with 4 numbers`);
+      }
+      const quaternion = rotationFormat === 'quaternion_wxyz'
+        ? [value[1], value[2], value[3], value[0]]
+        : value;
+      rotationMap.set(vrmBone, this.normalizeQuat(quaternion));
+    }
+    return rotationMap;
   }
 
   buildCorrectionMap(correctionData) {
@@ -1340,6 +1411,7 @@ class FBXToVRMAConverterFixed {
     const mappingOptions = {
       boneProfile: options.boneProfile,
       applyCorrections: options.applyCorrections,
+      applyRestPose: options.applyRestPose,
       shiftHipOrigin: options.shiftHipOrigin,
     };
 

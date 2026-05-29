@@ -120,6 +120,7 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `--no-shift-hip-origin` | Disable shifting hips translation X/Z so the reference frame starts at the origin | Enabled |
 | `--bone-profile <name>` | Bone mapping profile to use | `auto` |
 | `--apply-corrections <path>` | Apply rest-pose correction JSON to matching humanoid rotation channels | — |
+| `--apply-rest-pose <path>` | Overwrite mapped humanoid node rotations from a rest-pose JSON profile | — |
 | `--dump-nodes <path>` | Write a glTF node hierarchy and animation-target report for mapping debug | — |
 | `-V, --version` | Show version | — |
 | `-h, --help` | Show help | — |
@@ -144,6 +145,12 @@ node fbx2vrma-converter.js -i input.fbx -o output.vrma --bone-profile mimem-unit
 ```
 
 Per-bone `bones` configs support `"rotationFormat": "quaternion_xyzw"`, `"quaternion_wxyz"`, or `"euler_xyz_degrees"`. Euler entries are `[xDegrees, yDegrees, zDegrees]`. Set `"invert": true` or `"application": "inversePostMultiplyAnimation"` to apply the inverse of the listed rotations.
+
+Apply a rest-pose profile to overwrite static humanoid node rotations without changing animation keyframes:
+
+```bash
+node fbx2vrma-converter.js -i input.fbx -o output.vrma --bone-profile mimem-unity --apply-rest-pose mimem_unity_rest_pose.mimem_in_t_pose.json
+```
 
 ## How it works
 

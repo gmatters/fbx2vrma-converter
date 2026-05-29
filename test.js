@@ -734,7 +734,17 @@ describe('convertToVRMAWithTiming', () => {
       asset: { version: '2.0', generator: 'test' },
       scene: 0,
       scenes: [{ nodes: [0] }],
-      nodes: [{ name: 'mixamorig:Hips' }],
+      nodes: [{
+        name: 'mixamorig:Hips',
+        mesh: 0,
+        skin: 0,
+        scale: [1, 1, 1],
+        camera: 0,
+        extensions: { KHR_lights_punctual: { light: 0 } },
+        extras: { source: 'fbx' },
+        weights: [1],
+        matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      }],
       animations: [{ name: 'Idle', channels: [], samplers: [] }],
       accessors: [],
       bufferViews: [],
@@ -766,7 +776,67 @@ describe('convertToVRMAWithTiming', () => {
     assert.equal(vrma.skins, undefined);
     assert.equal(vrma.textures, undefined);
     assert.equal(vrma.images, undefined);
+    assert.equal(vrma.nodes[0].mesh, undefined);
+    assert.equal(vrma.nodes[0].skin, undefined);
+    assert.equal(vrma.nodes[0].scale, undefined);
+    assert.equal(vrma.nodes[0].camera, undefined);
+    assert.equal(vrma.nodes[0].extensions, undefined);
+    assert.equal(vrma.nodes[0].extras, undefined);
+    assert.equal(vrma.nodes[0].weights, undefined);
+    assert.equal(vrma.nodes[0].matrix, undefined);
+    assert.deepStrictEqual(Object.keys(vrma.nodes[0]).sort(), ['name']);
     assert.equal(vrma.animations.length, 1);
+  });
+
+  it('should apply rest-pose profile rotations to mapped humanoid nodes', () => {
+    const converter = createConverter();
+    const gltfData = {
+      asset: { version: '2.0' },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [
+        { name: 'mixamorig:Hips', rotation: [0, 0, 0, 1] },
+        { name: 'mixamorig:RightArm', rotation: [0, 0, 0, 1] },
+      ],
+      animations: [{ name: 'Idle', channels: [], samplers: [] }],
+      accessors: [],
+      bufferViews: [],
+      buffers: [],
+    };
+
+    const vrma = converter.convertToVRMAWithTiming(gltfData, {
+      restPoseData: {
+        rotationFormat: 'quaternion_xyzw',
+        bones: {
+          rightUpperArm: {
+            nodeName: 'mixamorig:RightArm',
+            rotation: [0.25, 0, 0, 0.968245836],
+          },
+        },
+      },
+    });
+
+    assert.deepStrictEqual(vrma.nodes[0].rotation, [0, 0, 0, 1]);
+    assert.ok(vrma.nodes[1].rotation[0] > 0.25 - 1e-6);
+    assert.ok(vrma.nodes[1].rotation[3] < 0.969);
+    assert.deepStrictEqual(vrma.extensions.VRMC_vrm_animation.humanoid.humanBones.rightUpperArm, { node: 1 });
+  });
+
+  it('should reject malformed rest-pose profiles', () => {
+    const converter = createConverter();
+
+    assert.throws(
+      () => converter.buildRestPoseRotationMap({}),
+      /bones object/
+    );
+    assert.throws(
+      () => converter.buildRestPoseRotationMap({ rotationFormat: 'euler_xyz_degrees', bones: { rightUpperArm: [1, 2, 3] } }),
+      /Unsupported rotationFormat/
+    );
+    assert.throws(
+      () => converter.buildRestPoseRotationMap({ bones: { rightUpperArm: [1, 2, 3] } }),
+      /quaternion with 4 numbers/
+    );
   });
 
   it('should strip mesh and skin references from nodes', () => {
