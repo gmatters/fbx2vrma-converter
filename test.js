@@ -409,6 +409,37 @@ describe('shiftHipTranslationXZToOrigin', () => {
     ]);
   });
 
+  it('should preserve world altitude when hips parent is rotated', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf(
+      [0, 1],
+      [[1, 2, 3], [4, 5, 6]],
+      'VEC3'
+    );
+    gltfData.nodes = [
+      { name: 'Root', rotation: converter.quaternionFromAxisAngle([1, 0, 0], -90), children: [1] },
+      { name: 'Hips' },
+    ];
+    gltfData.animations[0].channels[0].target = { node: 1, path: 'translation' };
+
+    const parentLinear = converter.getParentWorldLinearTransform(gltfData, 1);
+    const beforeReferenceWorld = converter.multiplyMat3Vec3(parentLinear, [4, 5, 6]);
+
+    converter.shiftHipTranslationXZToOrigin(gltfData);
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output);
+    const afterReferenceWorld = converter.multiplyMat3Vec3(parentLinear, values[1]);
+
+    assert.ok(Math.abs(afterReferenceWorld[0]) < 1e-6);
+    assert.ok(Math.abs(afterReferenceWorld[2]) < 1e-6);
+    assert.ok(Math.abs(afterReferenceWorld[1] - beforeReferenceWorld[1]) < 1e-6);
+    assert.ok(Math.abs(values[1][0]) < 1e-6);
+    assert.ok(Math.abs(values[1][1]) < 1e-6);
+    assert.equal(values[1][2], 6);
+  });
+
   it('should leave hip translation unchanged when disabled', () => {
     const converter = createConverter();
     const gltfData = createAnimationGltf(

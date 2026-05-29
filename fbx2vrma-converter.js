@@ -565,15 +565,19 @@ class FBXToVRMAConverterFixed {
         }
 
         const selectedIndex = Math.min(referenceSampleIndex, translations.length - 1);
-        const [offsetX, , offsetZ] = translations[selectedIndex];
-        const shiftedTranslations = translations.map(([x, y, z]) => [x - offsetX, y, z - offsetZ]);
+        const localOffset = this.getLocalOffsetForWorldHorizontalOrigin(gltfData, hipNode, translations[selectedIndex]);
+        const shiftedTranslations = translations.map(([x, y, z]) => [
+          x - localOffset[0],
+          y - localOffset[1],
+          z - localOffset[2],
+        ]);
         sampler.output = this.appendAccessorData(gltfData, buffers, shiftedTranslations, {
           type: outputAccessor.type,
           componentType: outputAccessor.componentType,
         });
         shiftedSamplers.add(channel.sampler);
         shiftedSamplerCount++;
-        console.log(`Shifted hips translation X/Z by ${-offsetX}, ${-offsetZ} using sample ${selectedIndex}`);
+        console.log(`Shifted hips world X/Z to origin using sample ${selectedIndex}; local delta [${localOffset.map(value => value.toFixed(6)).join(', ')}]`);
       }
     }
 
@@ -583,6 +587,126 @@ class FBXToVRMAConverterFixed {
       console.log('Skipped hip origin shift: no hips translation channel found');
     }
     return gltfData;
+  }
+
+  getLocalOffsetForWorldHorizontalOrigin(gltfData, nodeIndex, localTranslation) {
+    const parentLinear = this.getParentWorldLinearTransform(gltfData, nodeIndex);
+    const worldPosition = this.multiplyMat3Vec3(parentLinear, localTranslation);
+    const worldHorizontalOffset = [worldPosition[0], 0, worldPosition[2]];
+    return this.multiplyMat3Vec3(this.invertMat3(parentLinear), worldHorizontalOffset);
+  }
+
+  getParentWorldLinearTransform(gltfData, nodeIndex) {
+    const parents = this.getNodeParentMap(gltfData);
+    const ancestorIndices = [];
+    let current = parents.get(nodeIndex);
+    while (current !== undefined) {
+      ancestorIndices.push(current);
+      current = parents.get(current);
+    }
+
+    return ancestorIndices.reverse().reduce(
+      (matrix, ancestorIndex) => this.multiplyMat3(matrix, this.getNodeLocalLinearTransform(gltfData.nodes[ancestorIndex])),
+      this.identityMat3()
+    );
+  }
+
+  getNodeParentMap(gltfData) {
+    const parents = new Map();
+    (gltfData.nodes || []).forEach((node, index) => {
+      (node.children || []).forEach(childIndex => parents.set(childIndex, index));
+    });
+    return parents;
+  }
+
+  getNodeLocalLinearTransform(node = {}) {
+    if (Array.isArray(node.matrix) && node.matrix.length === 16) {
+      return [
+        node.matrix[0], node.matrix[4], node.matrix[8],
+        node.matrix[1], node.matrix[5], node.matrix[9],
+        node.matrix[2], node.matrix[6], node.matrix[10],
+      ];
+    }
+
+    const rotation = node.rotation || [0, 0, 0, 1];
+    const scale = node.scale || [1, 1, 1];
+    const matrix = this.quaternionToMat3(rotation);
+    return [
+      matrix[0] * scale[0], matrix[1] * scale[1], matrix[2] * scale[2],
+      matrix[3] * scale[0], matrix[4] * scale[1], matrix[5] * scale[2],
+      matrix[6] * scale[0], matrix[7] * scale[1], matrix[8] * scale[2],
+    ];
+  }
+
+  identityMat3() {
+    return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  }
+
+  quaternionToMat3(quaternion) {
+    const [x, y, z, w] = this.normalizeQuat(quaternion);
+    const xx = x * x;
+    const yy = y * y;
+    const zz = z * z;
+    const xy = x * y;
+    const xz = x * z;
+    const yz = y * z;
+    const wx = w * x;
+    const wy = w * y;
+    const wz = w * z;
+    return [
+      1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy),
+      2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx),
+      2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy),
+    ];
+  }
+
+  multiplyMat3(a, b) {
+    return [
+      a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+      a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+      a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+      a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+      a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+      a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+      a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+      a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+      a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
+    ];
+  }
+
+  multiplyMat3Vec3(matrix, vector) {
+    return [
+      matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2],
+      matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2],
+      matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2],
+    ];
+  }
+
+  invertMat3(matrix) {
+    const [
+      a, b, c,
+      d, e, f,
+      g, h, i,
+    ] = matrix;
+    const cofactor00 = e * i - f * h;
+    const cofactor01 = c * h - b * i;
+    const cofactor02 = b * f - c * e;
+    const cofactor10 = f * g - d * i;
+    const cofactor11 = a * i - c * g;
+    const cofactor12 = c * d - a * f;
+    const cofactor20 = d * h - e * g;
+    const cofactor21 = b * g - a * h;
+    const cofactor22 = a * e - b * d;
+    const determinant = a * cofactor00 + b * cofactor10 + c * cofactor20;
+    if (Math.abs(determinant) < 1e-12) {
+      throw new Error('Cannot shift hip origin through a non-invertible parent transform');
+    }
+    const invDeterminant = 1 / determinant;
+    return [
+      cofactor00 * invDeterminant, cofactor01 * invDeterminant, cofactor02 * invDeterminant,
+      cofactor10 * invDeterminant, cofactor11 * invDeterminant, cofactor12 * invDeterminant,
+      cofactor20 * invDeterminant, cofactor21 * invDeterminant, cofactor22 * invDeterminant,
+    ];
   }
 
   getAnimationDuration(gltfData) {
