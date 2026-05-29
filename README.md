@@ -152,6 +152,62 @@ Apply a rest-pose profile to overwrite static humanoid node rotations without ch
 node fbx2vrma-converter.js -i input.fbx -o output.vrma --bone-profile mimem-unity --apply-rest-pose mimem_unity_rest_pose.mimem_in_t_pose.json
 ```
 
+To regenerate a rest-pose profile from an updated golden FBX, first convert that FBX without applying an existing rest-pose profile:
+
+```bash
+node fbx2vrma-converter.js -i golden_pose.fbx -o golden_pose.vrma --bone-profile mimem-unity --no-shift-hip-origin
+```
+
+Then extract the mapped humanoid static node rotations from the generated VRMA:
+
+```bash
+node - <<'NODE'
+const fs = require('fs');
+const input = 'golden_pose.vrma';
+const output = 'mimem_unity_rest_pose.golden_pose.json';
+
+function readGlbJson(file) {
+  const buffer = fs.readFileSync(file);
+  let offset = 12;
+  while (offset < buffer.length) {
+    const length = buffer.readUInt32LE(offset);
+    const type = buffer.toString('utf8', offset + 4, offset + 8);
+    offset += 8;
+    if (type === 'JSON') {
+      return JSON.parse(buffer.slice(offset, offset + length).toString('utf8').trim());
+    }
+    offset += length;
+  }
+  throw new Error('No JSON chunk found');
+}
+
+const gltf = readGlbJson(input);
+const humanBones = gltf.extensions?.VRMC_vrm_animation?.humanoid?.humanBones;
+if (!humanBones) throw new Error('No VRMC_vrm_animation humanoid bones found');
+
+const bones = {};
+for (const [vrmBone, binding] of Object.entries(humanBones).sort(([a], [b]) => a.localeCompare(b))) {
+  const node = gltf.nodes?.[binding.node];
+  if (!node) continue;
+  bones[vrmBone] = {
+    nodeName: node.name || null,
+    nodeIndex: binding.node,
+    rotation: node.rotation ? node.rotation.map(value => Number(value.toFixed(9))) : [0, 0, 0, 1],
+  };
+}
+
+fs.writeFileSync(output, `${JSON.stringify({
+  type: 'vrma-rest-pose-profile',
+  source: input,
+  boneProfile: 'mimem-unity',
+  rotationFormat: 'quaternion_xyzw',
+  description: `Static humanoid node rotations extracted from ${input}.`,
+  bones,
+}, null, 2)}\n`);
+console.log(`Wrote ${output} with ${Object.keys(bones).length} bones`);
+NODE
+```
+
 ## How it works
 
 1. Convert FBX → glTF using FBX2glTF
