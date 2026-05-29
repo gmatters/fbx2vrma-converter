@@ -1,0 +1,529 @@
+{
+  "type": "vrma-rest-pose-profile",
+  "source": "mimem_in_t_pose.vrma",
+  "boneProfile": "mimem-unity",
+  "rotationFormat": "quaternion_xyzw",
+  "description": "Golden static node rotations extracted from mimem_in_t_pose.vrma. Intended for applying a Mimem Unity rest-pose basis without changing animation keyframes.",
+  "bones": {
+    "chest": {
+      "nodeName": "spine_02.x",
+      "nodeIndex": 8,
+      "rotation": [
+        -0.071082696,
+        0.004614495,
+        -0.001371861,
+        0.997458816
+      ]
+    },
+    "head": {
+      "nodeName": "head.x",
+      "nodeIndex": 11,
+      "rotation": [
+        -0.077340052,
+        -0.006741615,
+        -0.000519923,
+        0.996981859
+      ]
+    },
+    "hips": {
+      "nodeName": "root.x",
+      "nodeIndex": 6,
+      "rotation": [
+        0.717986405,
+        0.000002666,
+        0.000002735,
+        0.696057141
+      ]
+    },
+    "leftFoot": {
+      "nodeName": "foot.l",
+      "nodeIndex": 259,
+      "rotation": [
+        0.484330297,
+        0.492159128,
+        -0.499787986,
+        0.522891521
+      ]
+    },
+    "leftHand": {
+      "nodeName": "hand.l",
+      "nodeIndex": 202,
+      "rotation": [
+        -0.043561552,
+        0.00529887,
+        0.014993464,
+        0.998924196
+      ]
+    },
+    "leftIndexDistal": {
+      "nodeName": "c_index3.l",
+      "nodeIndex": 205,
+      "rotation": [
+        -0.063799024,
+        -0.033197135,
+        0.061418805,
+        0.995517612
+      ]
+    },
+    "leftIndexIntermediate": {
+      "nodeName": "c_index2.l",
+      "nodeIndex": 204,
+      "rotation": [
+        0.003717692,
+        -0.02271994,
+        -0.015405771,
+        0.999616265
+      ]
+    },
+    "leftIndexProximal": {
+      "nodeName": "c_index1.l",
+      "nodeIndex": 203,
+      "rotation": [
+        0.052355316,
+        0.038216818,
+        -0.126605943,
+        0.989832997
+      ]
+    },
+    "leftLittleDistal": {
+      "nodeName": "c_pinky3.l",
+      "nodeIndex": 215,
+      "rotation": [
+        -0.054083724,
+        0.031521812,
+        -0.045319285,
+        0.997009277
+      ]
+    },
+    "leftLittleIntermediate": {
+      "nodeName": "c_pinky2.l",
+      "nodeIndex": 214,
+      "rotation": [
+        0.006034325,
+        0.003134685,
+        0.034325246,
+        0.999387562
+      ]
+    },
+    "leftLittleProximal": {
+      "nodeName": "c_pinky1.l",
+      "nodeIndex": 213,
+      "rotation": [
+        0.040782906,
+        -0.018098963,
+        0.109685637,
+        0.992964387
+      ]
+    },
+    "leftLowerArm": {
+      "nodeName": "forearm_stretch.l",
+      "nodeIndex": 201,
+      "rotation": [
+        3.08e-7,
+        1.47e-7,
+        0.009593392,
+        0.999953985
+      ]
+    },
+    "leftLowerLeg": {
+      "nodeName": "leg_stretch.l",
+      "nodeIndex": 258,
+      "rotation": [
+        0.000006969,
+        0.000002175,
+        0.006123383,
+        0.999981225
+      ]
+    },
+    "leftMiddleDistal": {
+      "nodeName": "c_middle3.l",
+      "nodeIndex": 210,
+      "rotation": [
+        -0.086569153,
+        -0.035881385,
+        0.040140107,
+        0.994789958
+      ]
+    },
+    "leftMiddleIntermediate": {
+      "nodeName": "c_middle2.l",
+      "nodeIndex": 209,
+      "rotation": [
+        0.006349485,
+        -0.006265171,
+        0.045366321,
+        0.998930573
+      ]
+    },
+    "leftMiddleProximal": {
+      "nodeName": "c_middle1.l",
+      "nodeIndex": 208,
+      "rotation": [
+        0.039711419,
+        -0.00564949,
+        -0.053753674,
+        0.997748256
+      ]
+    },
+    "leftRingDistal": {
+      "nodeName": "c_ring3.l",
+      "nodeIndex": 220,
+      "rotation": [
+        -0.040334772,
+        0.014179075,
+        -0.023682684,
+        0.998804867
+      ]
+    },
+    "leftRingIntermediate": {
+      "nodeName": "c_ring2.l",
+      "nodeIndex": 219,
+      "rotation": [
+        0.010730837,
+        -0.000714501,
+        0.027212802,
+        0.9995718
+      ]
+    },
+    "leftRingProximal": {
+      "nodeName": "c_ring1.l",
+      "nodeIndex": 218,
+      "rotation": [
+        0.036725927,
+        -0.009097428,
+        0.032754932,
+        0.998746991
+      ]
+    },
+    "leftShoulder": {
+      "nodeName": "shoulder.l",
+      "nodeIndex": 199,
+      "rotation": [
+        -0.500383973,
+        -0.497094631,
+        -0.499092162,
+        0.503408194
+      ]
+    },
+    "leftThumbDistal": {
+      "nodeName": "c_thumb3.l",
+      "nodeIndex": 225,
+      "rotation": [
+        -0.003979425,
+        0.022364689,
+        -0.03192275,
+        0.999232173
+      ]
+    },
+    "leftThumbMetacarpal": {
+      "nodeName": "c_thumb1.l",
+      "nodeIndex": 223,
+      "rotation": [
+        0.296001792,
+        0.615132153,
+        -0.275622696,
+        0.676777303
+      ]
+    },
+    "leftThumbProximal": {
+      "nodeName": "c_thumb2.l",
+      "nodeIndex": 224,
+      "rotation": [
+        -0.158602148,
+        -0.104131415,
+        0.05301588,
+        0.980403662
+      ]
+    },
+    "leftToes": {
+      "nodeName": "toes_01.l",
+      "nodeIndex": 260,
+      "rotation": [
+        0.000541998,
+        0.999577582,
+        0.016814122,
+        0.02369925
+      ]
+    },
+    "leftUpperArm": {
+      "nodeName": "arm_stretch.l",
+      "nodeIndex": 200,
+      "rotation": [
+        -0.002092987,
+        -0.002130586,
+        -0.00911103,
+        0.999954045
+      ]
+    },
+    "leftUpperLeg": {
+      "nodeName": "thigh_stretch.l",
+      "nodeIndex": 257,
+      "rotation": [
+        0.705705523,
+        0.013843177,
+        0.708283961,
+        0.011039947
+      ]
+    },
+    "neck": {
+      "nodeName": "neck.x",
+      "nodeIndex": 10,
+      "rotation": [
+        0.080742188,
+        0.006737344,
+        0.000717364,
+        0.996711969
+      ]
+    },
+    "rightFoot": {
+      "nodeName": "foot.r",
+      "nodeIndex": 265,
+      "rotation": [
+        0.484331369,
+        -0.492159456,
+        0.499787569,
+        0.522890627
+      ]
+    },
+    "rightHand": {
+      "nodeName": "hand.r",
+      "nodeIndex": 231,
+      "rotation": [
+        -0.043560691,
+        -0.005299987,
+        -0.014993813,
+        0.998924196
+      ]
+    },
+    "rightIndexDistal": {
+      "nodeName": "c_index3.r",
+      "nodeIndex": 234,
+      "rotation": [
+        -0.063801102,
+        0.03319969,
+        -0.061417568,
+        0.995517492
+      ]
+    },
+    "rightIndexIntermediate": {
+      "nodeName": "c_index2.r",
+      "nodeIndex": 233,
+      "rotation": [
+        0.00371971,
+        0.022716772,
+        0.015406101,
+        0.999616325
+      ]
+    },
+    "rightIndexProximal": {
+      "nodeName": "c_index1.r",
+      "nodeIndex": 232,
+      "rotation": [
+        0.052355833,
+        -0.038217194,
+        0.126605824,
+        0.989832938
+      ]
+    },
+    "rightLittleDistal": {
+      "nodeName": "c_pinky3.r",
+      "nodeIndex": 244,
+      "rotation": [
+        -0.05408445,
+        -0.031521104,
+        0.045319814,
+        0.997009218
+      ]
+    },
+    "rightLittleIntermediate": {
+      "nodeName": "c_pinky2.r",
+      "nodeIndex": 243,
+      "rotation": [
+        0.006033977,
+        -0.003134083,
+        -0.034325566,
+        0.999387562
+      ]
+    },
+    "rightLittleProximal": {
+      "nodeName": "c_pinky1.r",
+      "nodeIndex": 242,
+      "rotation": [
+        0.040782452,
+        0.018099651,
+        -0.1096856,
+        0.992964387
+      ]
+    },
+    "rightLowerArm": {
+      "nodeName": "forearm_stretch.r",
+      "nodeIndex": 230,
+      "rotation": [
+        -0.000001972,
+        0.000001109,
+        -0.009593097,
+        0.999953985
+      ]
+    },
+    "rightLowerLeg": {
+      "nodeName": "leg_stretch.r",
+      "nodeIndex": 264,
+      "rotation": [
+        0.000006905,
+        -0.000002158,
+        -0.006123367,
+        0.999981225
+      ]
+    },
+    "rightMiddleDistal": {
+      "nodeName": "c_middle3.r",
+      "nodeIndex": 239,
+      "rotation": [
+        -0.08657629,
+        0.035887863,
+        -0.040138707,
+        0.994789183
+      ]
+    },
+    "rightMiddleIntermediate": {
+      "nodeName": "c_middle2.r",
+      "nodeIndex": 238,
+      "rotation": [
+        0.006355037,
+        0.006259163,
+        -0.045365836,
+        0.998930633
+      ]
+    },
+    "rightMiddleProximal": {
+      "nodeName": "c_middle1.r",
+      "nodeIndex": 237,
+      "rotation": [
+        0.039710745,
+        0.005649238,
+        0.05375478,
+        0.997748256
+      ]
+    },
+    "rightRingDistal": {
+      "nodeName": "c_ring3.r",
+      "nodeIndex": 249,
+      "rotation": [
+        -0.040338323,
+        -0.014174711,
+        0.023684045,
+        0.998804748
+      ]
+    },
+    "rightRingIntermediate": {
+      "nodeName": "c_ring2.r",
+      "nodeIndex": 248,
+      "rotation": [
+        0.010733421,
+        0.000710563,
+        -0.027212506,
+        0.9995718
+      ]
+    },
+    "rightRingProximal": {
+      "nodeName": "c_ring1.r",
+      "nodeIndex": 247,
+      "rotation": [
+        0.036726005,
+        0.009097794,
+        -0.032754935,
+        0.998746991
+      ]
+    },
+    "rightShoulder": {
+      "nodeName": "shoulder.r",
+      "nodeIndex": 228,
+      "rotation": [
+        -0.50054121,
+        0.496936381,
+        0.499286681,
+        0.503215194
+      ]
+    },
+    "rightThumbDistal": {
+      "nodeName": "c_thumb3.r",
+      "nodeIndex": 254,
+      "rotation": [
+        -0.003980877,
+        -0.022366678,
+        0.03192234,
+        0.999232113
+      ]
+    },
+    "rightThumbMetacarpal": {
+      "nodeName": "c_thumb1.r",
+      "nodeIndex": 252,
+      "rotation": [
+        0.296001613,
+        -0.615130723,
+        0.275624424,
+        0.676777959
+      ]
+    },
+    "rightThumbProximal": {
+      "nodeName": "c_thumb2.r",
+      "nodeIndex": 253,
+      "rotation": [
+        -0.158604026,
+        0.104130141,
+        -0.05301775,
+        0.980403364
+      ]
+    },
+    "rightToes": {
+      "nodeName": "toes_01.r",
+      "nodeIndex": 266,
+      "rotation": [
+        -0.000542361,
+        0.999577522,
+        0.016814113,
+        -0.023700807
+      ]
+    },
+    "rightUpperArm": {
+      "nodeName": "arm_stretch.r",
+      "nodeIndex": 229,
+      "rotation": [
+        -0.002092155,
+        0.00212975,
+        0.009111513,
+        0.999954045
+      ]
+    },
+    "rightUpperLeg": {
+      "nodeName": "thigh_stretch.r",
+      "nodeIndex": 263,
+      "rotation": [
+        -0.705710471,
+        0.013844442,
+        0.708279073,
+        -0.0110386
+      ]
+    },
+    "spine": {
+      "nodeName": "spine_01.x",
+      "nodeIndex": 7,
+      "rotation": [
+        0.026911458,
+        -0.00351065,
+        0.001352504,
+        0.999630749
+      ]
+    },
+    "upperChest": {
+      "nodeName": "spine_03.x",
+      "nodeIndex": 9,
+      "rotation": [
+        0.025305478,
+        -0.001071084,
+        -0.00004678,
+        0.999679208
+      ]
+    }
+  }
+}
