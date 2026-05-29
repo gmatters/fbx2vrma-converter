@@ -364,6 +364,73 @@ describe('trimAnimationData', () => {
   });
 });
 
+describe('shiftHipTranslationXZToOrigin', () => {
+  it('should use the second hips translation sample when trim-in is not specified', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf(
+      [0, 1, 2],
+      [[10, 1, 20], [12, 2, 25], [15, 3, 30]],
+      'VEC3'
+    );
+    gltfData.nodes = [{ name: 'Hips' }];
+
+    converter.shiftHipTranslationXZToOrigin(gltfData);
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.deepStrictEqual(values, [
+      [-2, 1, -5],
+      [0, 2, 0],
+      [3, 3, 5],
+    ]);
+  });
+
+  it('should use the trimmed in-point sample when trim-in is specified', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf(
+      [0, 1, 2, 3],
+      [[0, 1, 0], [10, 2, 20], [15, 3, 30], [20, 4, 40]],
+      'VEC3'
+    );
+    gltfData.nodes = [{ name: 'Hips' }];
+
+    converter.trimAnimationData(gltfData, { trimIn: 1, trimOut: 3 });
+    converter.shiftHipTranslationXZToOrigin(gltfData, { useTrimInPoint: true });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.deepStrictEqual(values, [
+      [0, 2, 0],
+      [5, 3, 10],
+    ]);
+  });
+
+  it('should leave hip translation unchanged when disabled', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf(
+      [0, 1],
+      [[10, 1, 20], [12, 2, 25]],
+      'VEC3'
+    );
+    gltfData.nodes = [{ name: 'Hips' }];
+
+    converter.shiftHipTranslationXZToOrigin(gltfData, { enabled: false });
+
+    const sampler = gltfData.animations[0].samplers[0];
+    const buffers = converter.decodeBuffers(gltfData);
+    const values = converter.readAccessorElements(gltfData, buffers, sampler.output);
+
+    assert.deepStrictEqual(values, [
+      [10, 1, 20],
+      [12, 2, 25],
+    ]);
+  });
+});
+
 describe('enhanceAnimationTiming', () => {
   it('should calculate max duration from animation samplers', () => {
     const converter = createConverter();

@@ -191,6 +191,7 @@ class FBXToVRMAConverterFixed {
       .option('--trim-in-frame <frame>', 'Trim start frame, converted to seconds using --framerate')
       .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
       .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0')
+      .option('--no-shift-hip-origin', 'Disable shifting hip translation X/Z so the animation starts at the origin')
       .option('--bone-profile <name>', 'Bone mapping profile to use', 'auto')
       .option('--apply-corrections <path>', 'Apply rest-pose correction JSON to matching humanoid rotation channels')
       .option('--dump-nodes <path>', 'Write a glTF node hierarchy and animation-target report');
@@ -235,13 +236,19 @@ class FBXToVRMAConverterFixed {
       // Step 4: Trim animation data before timing metadata is calculated
       const trimmedGltfData = this.trimAnimationData(embeddedGltfData, trimOptions);
 
-      // Step 5: Analyze and enhance animation timing
-      const enhancedGltfData = this.enhanceAnimationTiming(trimmedGltfData, parseInt(framerate));
+      // Step 5: Shift hip locomotion to begin at X/Z origin unless explicitly disabled
+      const originShiftedGltfData = this.shiftHipTranslationXZToOrigin(trimmedGltfData, {
+        enabled: mappingOptions.shiftHipOrigin !== false,
+        useTrimInPoint: this.hasTrimInOption(trimOptions),
+      });
 
-      // Step 6: Convert to VRMA format
+      // Step 6: Analyze and enhance animation timing
+      const enhancedGltfData = this.enhanceAnimationTiming(originShiftedGltfData, parseInt(framerate));
+
+      // Step 7: Convert to VRMA format
       const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData, { correctionData });
 
-      // Step 7: Save VRMA as GLB binary
+      // Step 8: Save VRMA as GLB binary
       await this.saveAsGLB(vrmaData, outputPath);
 
       console.log(`Successfully converted to ${outputPath}`);
@@ -250,7 +257,7 @@ class FBXToVRMAConverterFixed {
       console.error('Conversion failed:', error.message);
       return false;
     } finally {
-      // Step 7: Clean up temp files regardless of errors
+      // Step 9: Clean up temp files regardless of errors
       await this.cleanupTempFiles([tempGltfPath]);
     }
   }
@@ -513,6 +520,66 @@ class FBXToVRMAConverterFixed {
       }
     }
     this.encodeBuffers(gltfData, buffers);
+    return gltfData;
+  }
+
+  hasTrimInOption(options = {}) {
+    return options.trimIn !== undefined || options.trimInFrame !== undefined;
+  }
+
+  shiftHipTranslationXZToOrigin(gltfData, options = {}) {
+    if (options.enabled === false) return gltfData;
+    if (!gltfData.animations?.length || !gltfData.buffers?.length) return gltfData;
+
+    const hipNode = this.generateHumanBones(gltfData).hips?.node;
+    if (hipNode === undefined) {
+      console.log('Skipped hip origin shift: no hips bone mapped');
+      return gltfData;
+    }
+
+    const referenceSampleIndex = options.useTrimInPoint ? 0 : 1;
+    const buffers = this.decodeBuffers(gltfData);
+    let shiftedSamplerCount = 0;
+
+    for (const animation of gltfData.animations) {
+      const shiftedSamplers = new Set();
+      for (const channel of animation.channels || []) {
+        if (channel.target?.node !== hipNode || channel.target?.path !== 'translation') {
+          continue;
+        }
+        if (shiftedSamplers.has(channel.sampler)) {
+          continue;
+        }
+
+        const sampler = animation.samplers?.[channel.sampler];
+        const outputAccessor = gltfData.accessors?.[sampler?.output];
+        if (!sampler || !outputAccessor || outputAccessor.type !== 'VEC3') {
+          continue;
+        }
+
+        const translations = this.readAccessorElements(gltfData, buffers, sampler.output);
+        if (translations.length === 0) {
+          continue;
+        }
+
+        const selectedIndex = Math.min(referenceSampleIndex, translations.length - 1);
+        const [offsetX, , offsetZ] = translations[selectedIndex];
+        const shiftedTranslations = translations.map(([x, y, z]) => [x - offsetX, y, z - offsetZ]);
+        sampler.output = this.appendAccessorData(gltfData, buffers, shiftedTranslations, {
+          type: outputAccessor.type,
+          componentType: outputAccessor.componentType,
+        });
+        shiftedSamplers.add(channel.sampler);
+        shiftedSamplerCount++;
+        console.log(`Shifted hips translation X/Z by ${-offsetX}, ${-offsetZ} using sample ${selectedIndex}`);
+      }
+    }
+
+    if (shiftedSamplerCount > 0) {
+      this.encodeBuffers(gltfData, buffers);
+    } else {
+      console.log('Skipped hip origin shift: no hips translation channel found');
+    }
     return gltfData;
   }
 
@@ -1273,6 +1340,7 @@ class FBXToVRMAConverterFixed {
     const mappingOptions = {
       boneProfile: options.boneProfile,
       applyCorrections: options.applyCorrections,
+      shiftHipOrigin: options.shiftHipOrigin,
     };
 
     let success;

@@ -117,6 +117,7 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `--trim-in-frame <frame>` | Trim start frame, converted with `--framerate` | — |
 | `--trim-out-frame <frame>` | Trim end frame, converted with `--framerate`; exact out pose is excluded | — |
 | `--loop-smoothing <seconds>` | Blend tail samples toward the first pose over this duration | `0` |
+| `--no-shift-hip-origin` | Disable shifting hips translation X/Z so the reference frame starts at the origin | Enabled |
 | `--bone-profile <name>` | Bone mapping profile to use | `auto` |
 | `--apply-corrections <path>` | Apply rest-pose correction JSON to matching humanoid rotation channels | — |
 | `--dump-nodes <path>` | Write a glTF node hierarchy and animation-target report for mapping debug | — |
