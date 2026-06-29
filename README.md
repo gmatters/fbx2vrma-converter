@@ -118,7 +118,7 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `--trim-out-frame <frame>` | Trim end frame, converted with `--framerate`; exact out pose is excluded | — |
 | `--loop-smoothing <seconds>` | Blend tail samples toward the first pose over this duration | `0` |
 | `--no-shift-hip-origin` | Disable shifting hips world X/Z so the reference frame starts at the origin without changing world Y altitude | Enabled |
-| `--bone-profile <name>` | Bone mapping profile to use | `auto` |
+| `--bone-profile <name>` | Bone mapping profile to use | `default` |
 | `--apply-corrections <path>` | Apply rest-pose correction JSON to matching humanoid rotation channels | — |
 | `--apply-rest-pose <path>` | Overwrite mapped humanoid node rotations from a rest-pose JSON profile | — |
 | `--dump-nodes <path>` | Write a glTF node hierarchy and animation-target report for mapping debug | — |
@@ -127,9 +127,18 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 
 Available bone profiles:
 
-- `auto` / `mixamo`: Mixamo bone names, with or without the `mixamorig:` prefix
+- `default` / `mixamo`: Mixamo bone names, with or without the `mixamorig:` prefix
 - `mimem-unity`: Mimem.ai Unity-style export names
 - `sj-mizuki`: SJ_A-002_MIZUKI-style Mixamo-like names with `Spine3` mapped as `upperChest`
+
+`auto` is accepted as a backwards-compatible alias for `default`; it does not perform best-fit detection.
+
+The converter logs the selected bone mapping profile at the start of each conversion, including whether it came from the default profile or an explicit `--bone-profile` argument:
+
+```text
+Bone mapping profile: mixamo (resolved to mixamo); reason: default profile
+Bone mapping profile: mimem-unity (resolved to mimem-unity); reason: explicit --bone-profile unity-style
+```
 
 ### Debugging bone mappings
 
@@ -141,13 +150,14 @@ node fbx2vrma-converter.js -i input.fbx --dump-nodes nodes.txt
 
 ### Correction And Modification Passes
 
-Bone mapping is automatic, using `--bone-profile` or the default `auto` profile. The other correction and modification passes are explicit unless noted below.
+Bone mapping uses `--bone-profile` or the `default` profile when no profile is passed. The other correction and modification passes are explicit unless noted below.
 
 Default-on passes:
 
 - `--no-shift-hip-origin` disables the default hip-origin shift. When enabled, the converter shifts hips world X/Z so the reference sample starts at horizontal origin while preserving world Y altitude. If trim-in is specified, that trimmed first sample is used as the reference; otherwise the second sample is used because the first frame may be exceptional.
 - VRMA compliance filtering always removes scale animation channels on humanoid bones and translation animation channels on humanoid bones other than `hips`.
 - VRMA node cleanup always strips non-animation scene attachments from output nodes. Output nodes keep only `name`, `children`, `translation`, and `rotation`.
+- Ancestor-transform reporting always logs non-humanoid parent/wrapper nodes that affect mapped humanoid world transforms. These nodes can affect the final world position or rotation through static translation/rotation/scale/matrix values or through animation channels targeting the wrapper node.
 
 Opt-in passes:
 
@@ -161,6 +171,15 @@ When correction files are applied, the converter prints a summary:
 - `Applied correction file to N rotation sampler(s): ...`
 - `Applied rest-pose rotations to N humanoid node(s)`
 - unmatched correction/rest-pose keys are reported with `Skipped N unmatched ...`
+
+When wrapper nodes affect mapped humanoid bones, the converter prints entries like:
+
+```text
+Non-humanoid ancestor nodes affecting humanoid world transforms (1):
+  [1] Armature: T=[1,2,3]; animated=Walk:rotation; affects 52 bone(s): hips, spine, chest, ...
+```
+
+Use this report to account for transforms outside the humanoid bones themselves. Identity wrapper nodes without animation are not listed.
 
 Apply a reviewed correction JSON during conversion. The file can either contain a `corrections` array or a per-VRM-bone `bones` object such as `vrm_bone_rotation_offsets.example.json` or `vrm_bone_euler_offsets.example.json`.
 

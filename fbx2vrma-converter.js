@@ -169,7 +169,7 @@ class FBXToVRMAConverterFixed {
     this.setupCommands(parse);
     this.boneMappingProfiles = {
       mixamo: {
-        aliases: ['auto'],
+        aliases: ['default', 'auto'],
         mapping: MIXAMO_BONE_MAPPING,
         normalizeName: name => name && (name.startsWith('mixamorig:') ? name : `mixamorig:${name}`),
       },
@@ -183,7 +183,7 @@ class FBXToVRMAConverterFixed {
         normalizeName: name => name && (name.startsWith('mixamorig:') ? name : `mixamorig:${name}`),
       },
     };
-    this.boneProfileName = 'auto';
+    this.boneProfileName = 'mixamo';
     this.humanoidBoneMapping = MIXAMO_BONE_MAPPING;
   }
 
@@ -202,7 +202,7 @@ class FBXToVRMAConverterFixed {
       .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
       .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0')
       .option('--no-shift-hip-origin', 'Disable shifting hip translation X/Z so the animation starts at the origin')
-      .option('--bone-profile <name>', 'Bone mapping profile to use', 'auto')
+      .option('--bone-profile <name>', 'Bone mapping profile to use', 'default')
       .option('--apply-corrections <path>', 'Apply rest-pose correction JSON to matching humanoid rotation channels')
       .option('--apply-rest-pose <path>', 'Apply static humanoid node rotations from a rest-pose JSON profile')
       .option('--dump-nodes <path>', 'Write a glTF node hierarchy and animation-target report');
@@ -228,7 +228,8 @@ class FBXToVRMAConverterFixed {
       }
 
       console.log(`Converting ${inputPath} to ${outputPath}...`);
-      this.setBoneProfile(mappingOptions.boneProfile || 'auto');
+      this.setBoneProfile(mappingOptions.boneProfile || 'default');
+      this.logBoneProfileSelection(mappingOptions);
       const correctionData = await this.loadCorrectionData(mappingOptions);
       const restPoseData = await this.loadRestPoseData(mappingOptions);
 
@@ -947,6 +948,7 @@ class FBXToVRMAConverterFixed {
     if (boneCount === 0) {
       throw new Error('No humanoid bones matched. Check input skeleton bone names or add mappings before converting to VRMA.');
     }
+    this.logHumanoidAncestorInfluencers(gltfData, humanBones);
     if (options.correctionData) {
       this.applyCorrectionData(gltfData, humanBones, options.correctionData);
     }
@@ -993,6 +995,105 @@ class FBXToVRMAConverterFixed {
       }
     }
     return stripped;
+  }
+
+  logHumanoidAncestorInfluencers(gltfData, humanBones) {
+    const influencers = this.getHumanoidAncestorInfluencers(gltfData, humanBones);
+    if (influencers.length === 0) {
+      console.log('No non-humanoid ancestor transforms affect humanoid bones');
+      return;
+    }
+
+    console.log(`Non-humanoid ancestor nodes affecting humanoid world transforms (${influencers.length}):`);
+    for (const influencer of influencers) {
+      const affected = influencer.affectedBones.length <= 8
+        ? influencer.affectedBones.join(', ')
+        : `${influencer.affectedBones.slice(0, 8).join(', ')}, ...`;
+      console.log(`  [${influencer.index}] ${influencer.name}: ${influencer.summary}; affects ${influencer.affectedBones.length} bone(s): ${affected}`);
+    }
+  }
+
+  getHumanoidAncestorInfluencers(gltfData, humanBones) {
+    const nodes = gltfData.nodes || [];
+    const parents = this.getNodeParentMap(gltfData);
+    const nodeToBone = new Map(Object.entries(humanBones).map(([boneName, boneData]) => [boneData.node, boneName]));
+    const animatedPaths = this.getAnimatedNodePathMap(gltfData);
+    const ancestorToBones = new Map();
+
+    for (const [boneName, boneData] of Object.entries(humanBones)) {
+      let current = parents.get(boneData.node);
+      while (current !== undefined) {
+        if (!nodeToBone.has(current)) {
+          if (!ancestorToBones.has(current)) ancestorToBones.set(current, new Set());
+          ancestorToBones.get(current).add(boneName);
+        }
+        current = parents.get(current);
+      }
+    }
+
+    return [...ancestorToBones.entries()]
+      .map(([index, affectedBones]) => {
+        const node = nodes[index] || {};
+        const transformParts = this.getInfluentialTransformParts(node);
+        const animated = animatedPaths.get(index) || [];
+        if (transformParts.length === 0 && animated.length === 0) return null;
+        const summaryParts = [];
+        if (transformParts.length > 0) summaryParts.push(transformParts.join('; '));
+        if (animated.length > 0) summaryParts.push(`animated=${animated.join(',')}`);
+        return {
+          index,
+          name: node.name || `(unnamed-${index})`,
+          affectedBones: [...affectedBones].sort(),
+          summary: summaryParts.join('; '),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.index - b.index);
+  }
+
+  getAnimatedNodePathMap(gltfData) {
+    const animatedPaths = new Map();
+    (gltfData.animations || []).forEach((animation, animationIndex) => {
+      (animation.channels || []).forEach(channel => {
+        const nodeIndex = channel.target?.node;
+        if (nodeIndex === undefined) return;
+        if (!animatedPaths.has(nodeIndex)) animatedPaths.set(nodeIndex, []);
+        animatedPaths.get(nodeIndex).push(`${animation.name || `Animation${animationIndex}`}:${channel.target?.path || 'unknown'}`);
+      });
+    });
+    return animatedPaths;
+  }
+
+  getInfluentialTransformParts(node) {
+    const parts = [];
+    if (node.translation && !this.isNearlyArray(node.translation, [0, 0, 0])) {
+      parts.push(`T=${this.formatNumberArray(node.translation)}`);
+    }
+    if (node.rotation && !this.isNearlyArray(node.rotation, [0, 0, 0, 1])) {
+      parts.push(`R=${this.formatNumberArray(node.rotation)}`);
+    }
+    if (node.scale && !this.isNearlyArray(node.scale, [1, 1, 1])) {
+      parts.push(`S=${this.formatNumberArray(node.scale)}`);
+    }
+    if (node.matrix && !this.isNearlyArray(node.matrix, [
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1,
+    ])) {
+      parts.push(`M=${this.formatNumberArray(node.matrix)}`);
+    }
+    return parts;
+  }
+
+  isNearlyArray(value, expected, epsilon = 1e-6) {
+    return Array.isArray(value)
+      && value.length === expected.length
+      && value.every((item, index) => Math.abs(item - expected[index]) <= epsilon);
+  }
+
+  formatNumberArray(value) {
+    return `[${value.map(item => Number.isFinite(item) ? Number(item.toFixed(6)) : item).join(',')}]`;
   }
 
   processAnimationsWithTiming(animations, duration, humanBones = {}) {
@@ -1381,12 +1482,22 @@ class FBXToVRMAConverterFixed {
     return profile.mapping[nodeName] || profile.mapping[normalizedName];
   }
 
-  setBoneProfile(profileName = 'auto') {
+  setBoneProfile(profileName = 'default') {
     this.boneProfileName = this.resolveBoneProfileName(profileName);
     this.humanoidBoneMapping = this.getBoneProfile(this.boneProfileName).mapping;
   }
 
-  resolveBoneProfileName(profileName = 'auto') {
+  logBoneProfileSelection(mappingOptions = {}) {
+    const requestedProfile = mappingOptions.boneProfile || 'default';
+    const resolvedProfile = this.resolveBoneProfileName(requestedProfile);
+    const reason = mappingOptions.boneProfileExplicit
+      ? `explicit --bone-profile ${requestedProfile}`
+      : 'default profile';
+    const aliasText = requestedProfile !== resolvedProfile ? ` (resolved to ${resolvedProfile})` : '';
+    console.log(`Bone mapping profile: ${resolvedProfile}${aliasText}; reason: ${reason}`);
+  }
+
+  resolveBoneProfileName(profileName = 'default') {
     if (this.boneMappingProfiles[profileName]) return profileName;
 
     for (const [name, profile] of Object.entries(this.boneMappingProfiles)) {
@@ -1544,6 +1655,7 @@ class FBXToVRMAConverterFixed {
     };
     const mappingOptions = {
       boneProfile: options.boneProfile,
+      boneProfileExplicit: this.program.getOptionValueSource?.('boneProfile') === 'cli',
       applyCorrections: options.applyCorrections,
       applyRestPose: options.applyRestPose,
       shiftHipOrigin: options.shiftHipOrigin,

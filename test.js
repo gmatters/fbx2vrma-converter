@@ -110,8 +110,11 @@ describe('generateHumanBones', () => {
     converter.setBoneProfile('mixamo');
     assert.equal(converter.getVRMBoneName('Hips'), 'hips');
 
-    converter.setBoneProfile('auto');
+    converter.setBoneProfile('default');
     assert.equal(converter.getVRMBoneName('mixamorig:Head'), 'head');
+
+    converter.setBoneProfile('auto');
+    assert.equal(converter.getVRMBoneName('mixamorig:Hips'), 'hips');
   });
 
   it('should reject unknown bone mapping profiles', () => {
@@ -121,6 +124,24 @@ describe('generateHumanBones', () => {
       () => converter.setBoneProfile('unknown-profile'),
       /Unknown bone profile/
     );
+  });
+
+  it('should log whether bone profile selection is default or explicit', () => {
+    const converter = createConverter();
+    const logs = [];
+    const originalLog = console.log;
+    console.log = message => logs.push(message);
+    try {
+      converter.setBoneProfile('default');
+      converter.logBoneProfileSelection({ boneProfile: 'default', boneProfileExplicit: false });
+      converter.setBoneProfile('unity-style');
+      converter.logBoneProfileSelection({ boneProfile: 'unity-style', boneProfileExplicit: true });
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.match(logs[0], /Bone mapping profile: mixamo \(resolved to mixamo\); reason: default profile/);
+    assert.match(logs[1], /Bone mapping profile: mimem-unity \(resolved to mimem-unity\); reason: explicit --bone-profile unity-style/);
   });
 
   it('should map Mimem Unity-style body and finger bones', () => {
@@ -313,6 +334,50 @@ describe('formatNodeDump', () => {
     assert.match(dump, /parent: 0; children: 2; mapped: hips; animated: Walk:translation; transforms: T/);
     assert.match(dump, /\[2\] Spine/);
     assert.match(dump, /mapped: spine; animated: Walk:rotation; transforms: R; mesh: 0; skin: 0/);
+  });
+});
+
+describe('getHumanoidAncestorInfluencers', () => {
+  it('should report non-humanoid ancestor transforms that affect humanoid bones', () => {
+    const converter = createConverter();
+    const gltfData = {
+      nodes: [
+        { name: 'RootNode', children: [1] },
+        { name: 'Armature', translation: [1, 2, 3], rotation: [0, 0, 0, 1], children: [2] },
+        { name: 'Hips', children: [3] },
+        { name: 'Spine' },
+      ],
+      animations: [{
+        name: 'MoveRig',
+        channels: [
+          { target: { node: 1, path: 'rotation' } },
+          { target: { node: 2, path: 'translation' } },
+        ],
+      }],
+    };
+    const humanBones = converter.generateHumanBones(gltfData);
+
+    const influencers = converter.getHumanoidAncestorInfluencers(gltfData, humanBones);
+
+    assert.equal(influencers.length, 1);
+    assert.equal(influencers[0].index, 1);
+    assert.equal(influencers[0].name, 'Armature');
+    assert.match(influencers[0].summary, /T=\[1,2,3\]/);
+    assert.match(influencers[0].summary, /animated=MoveRig:rotation/);
+    assert.deepStrictEqual(influencers[0].affectedBones, ['hips', 'spine']);
+  });
+
+  it('should ignore identity non-humanoid ancestors without animation', () => {
+    const converter = createConverter();
+    const gltfData = {
+      nodes: [
+        { name: 'RootNode', translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], children: [1] },
+        { name: 'Hips' },
+      ],
+    };
+    const humanBones = converter.generateHumanBones(gltfData);
+
+    assert.deepStrictEqual(converter.getHumanoidAncestorInfluencers(gltfData, humanBones), []);
   });
 });
 
