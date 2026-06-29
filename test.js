@@ -178,6 +178,35 @@ describe('generateHumanBones', () => {
     assert.equal(converter.getVRMBoneName('spine_01.x'), 'spine');
   });
 
+  it('should support SJ Mizuki skeleton profile with Spine3 as upper chest', () => {
+    const converter = createConverter();
+    converter.setBoneProfile('sj-mizuki');
+    const gltfData = {
+      nodes: [
+        { name: 'Hips' },
+        { name: 'Spine' },
+        { name: 'Spine1' },
+        { name: 'Spine2' },
+        { name: 'Spine3' },
+        { name: 'Neck' },
+        { name: 'Head' },
+        { name: 'LeftArm' },
+        { name: 'RightArm' },
+      ],
+    };
+
+    const bones = converter.generateHumanBones(gltfData);
+
+    assert.deepStrictEqual(bones.hips, { node: 0 });
+    assert.deepStrictEqual(bones.spine, { node: 1 });
+    assert.deepStrictEqual(bones.chest, { node: 2 });
+    assert.deepStrictEqual(bones.upperChest, { node: 4 });
+    assert.deepStrictEqual(bones.neck, { node: 5 });
+    assert.deepStrictEqual(bones.head, { node: 6 });
+    assert.equal(converter.getVRMBoneName('Spine3'), 'upperChest');
+    assert.equal(converter.getVRMBoneName('mixamorig:Spine3'), 'upperChest');
+  });
+
   it('should skip nodes without matching bone names', () => {
     const converter = createConverter();
     const originalWarn = console.warn;

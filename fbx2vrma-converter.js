@@ -90,6 +90,11 @@ const MIXAMO_BONE_MAPPING = {
   'mixamorig:RightHandPinky3':  'rightLittleDistal',
 };
 
+const SJ_MIZUKI_BONE_MAPPING = {
+  ...MIXAMO_BONE_MAPPING,
+  'mixamorig:Spine3': 'upperChest',
+};
+
 const MIMEM_UNITY_BONE_MAPPING = {
   'root.x': 'hips',
   'spine_01.x': 'spine',
@@ -171,6 +176,11 @@ class FBXToVRMAConverterFixed {
       'mimem-unity': {
         aliases: ['mimem_unity', 'unity-style', 'unity'],
         mapping: MIMEM_UNITY_BONE_MAPPING,
+      },
+      'sj-mizuki': {
+        aliases: ['sj_mizuki', 'mizuki'],
+        mapping: SJ_MIZUKI_BONE_MAPPING,
+        normalizeName: name => name && (name.startsWith('mixamorig:') ? name : `mixamorig:${name}`),
       },
     };
     this.boneProfileName = 'auto';

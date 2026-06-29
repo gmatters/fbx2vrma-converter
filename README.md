@@ -129,6 +129,7 @@ Available bone profiles:
 
 - `auto` / `mixamo`: Mixamo bone names, with or without the `mixamorig:` prefix
 - `mimem-unity`: Mimem.ai Unity-style export names
+- `sj-mizuki`: SJ_A-002_MIZUKI-style Mixamo-like names with `Spine3` mapped as `upperChest`
 
 ### Debugging bone mappings
 
@@ -138,18 +139,81 @@ Use `--dump-nodes` to inspect every glTF node after FBX2glTF conversion. The rep
 node fbx2vrma-converter.js -i input.fbx --dump-nodes nodes.txt
 ```
 
+### Correction And Modification Passes
+
+Bone mapping is automatic, using `--bone-profile` or the default `auto` profile. The other correction and modification passes are explicit unless noted below.
+
+Default-on passes:
+
+- `--no-shift-hip-origin` disables the default hip-origin shift. When enabled, the converter shifts hips world X/Z so the reference sample starts at horizontal origin while preserving world Y altitude. If trim-in is specified, that trimmed first sample is used as the reference; otherwise the second sample is used because the first frame may be exceptional.
+- VRMA compliance filtering always removes scale animation channels on humanoid bones and translation animation channels on humanoid bones other than `hips`.
+- VRMA node cleanup always strips non-animation scene attachments from output nodes. Output nodes keep only `name`, `children`, `translation`, and `rotation`.
+
+Opt-in passes:
+
+- `--apply-corrections <path>` applies rotation offsets to animation keyframes. It never runs unless this argument is passed, and it does not inspect animation data to infer corrections.
+- `--apply-rest-pose <path>` overwrites static humanoid node rotations from a rest-pose profile. It never runs unless this argument is passed, and it does not modify animation keyframes.
+- `--loop-smoothing <seconds>` blends tail samples toward the first pose over the requested window. It only runs when set to a value greater than `0`.
+- `--trim-in`, `--trim-out`, `--trim-in-frame`, and `--trim-out-frame` trim sampler data and shift the trim-in point to output time `0`. They only run when trim arguments are provided.
+
+When correction files are applied, the converter prints a summary:
+
+- `Applied correction file to N rotation sampler(s): ...`
+- `Applied rest-pose rotations to N humanoid node(s)`
+- unmatched correction/rest-pose keys are reported with `Skipped N unmatched ...`
+
 Apply a reviewed correction JSON during conversion. The file can either contain a `corrections` array or a per-VRM-bone `bones` object such as `vrm_bone_rotation_offsets.example.json` or `vrm_bone_euler_offsets.example.json`.
 
 ```bash
 node fbx2vrma-converter.js -i input.fbx -o output.vrma --bone-profile mimem-unity --apply-corrections corrections.json
 ```
 
-Per-bone `bones` configs support `"rotationFormat": "quaternion_xyzw"`, `"quaternion_wxyz"`, or `"euler_xyz_degrees"`. Euler entries are `[xDegrees, yDegrees, zDegrees]`. Set `"invert": true` or `"application": "inversePostMultiplyAnimation"` to apply the inverse of the listed rotations.
+`--apply-corrections` supports two config shapes:
+
+```json
+{
+  "corrections": [
+    {
+      "vrmBone": "leftUpperArm",
+      "localPostCorrectionQuaternion": [0, 0, 0, 1]
+    }
+  ]
+}
+```
+
+or:
+
+```json
+{
+  "rotationFormat": "euler_xyz_degrees",
+  "bones": {
+    "leftUpperArm": [-10, 0, 0]
+  }
+}
+```
+
+Corrections can be keyed by `vrmBone`, `hierarchyPath`, or unique `nodeName` in the `corrections` array form. Per-bone `bones` configs are keyed by VRM bone name. Supported `rotationFormat` values for animation corrections are `"quaternion_xyzw"`, `"quaternion_wxyz"`, and `"euler_xyz_degrees"`. Euler entries are `[xDegrees, yDegrees, zDegrees]`. Set `"invert": true` or `"application": "inversePostMultiplyAnimation"` to apply the inverse of the listed rotations.
 
 Apply a rest-pose profile to overwrite static humanoid node rotations without changing animation keyframes:
 
 ```bash
 node fbx2vrma-converter.js -i input.fbx -o output.vrma --bone-profile mimem-unity --apply-rest-pose mimem_unity_rest_pose.mimem_in_t_pose.json
+```
+
+Rest-pose profiles are keyed by VRM bone name and support `"rotationFormat": "quaternion_xyzw"` or `"quaternion_wxyz"`:
+
+```json
+{
+  "type": "vrma-rest-pose-profile",
+  "boneProfile": "mimem-unity",
+  "rotationFormat": "quaternion_xyzw",
+  "bones": {
+    "rightUpperArm": {
+      "nodeName": "arm_stretch.r",
+      "rotation": [0, 0, 0, 1]
+    }
+  }
+}
 ```
 
 To regenerate a rest-pose profile from an updated golden FBX, first convert that FBX without applying an existing rest-pose profile:
@@ -211,12 +275,15 @@ NODE
 ## How it works
 
 1. Convert FBX → glTF using FBX2glTF
-2. Analyze animation timing (duration, frame count)
-3. Embed binary buffer as base64
-4. Filter channels that violate VRMA spec (scale on humanoid bones, translation on non-hips bones)
-5. Map Mixamo bone names to VRM humanoid bone names
-6. Strip mesh/skin references and rest-pose scale from nodes
-7. Output as GLB binary
+2. Embed binary buffer as base64
+3. Optionally trim animation samplers and apply loop smoothing
+4. Shift hips world X/Z to origin unless disabled
+5. Analyze animation timing (duration, frame count)
+6. Map source bone names to VRM humanoid bone names
+7. Optionally apply animation rotation corrections and static rest-pose rotations
+8. Filter channels that violate VRMA spec (scale on humanoid bones, translation on non-hips bones)
+9. Strip non-animation scene attachments from nodes
+10. Output as GLB binary
 
 ## Bone mapping
 
