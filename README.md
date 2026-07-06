@@ -128,17 +128,19 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 Available bone profiles:
 
 - `default` / `mixamo`: Mixamo bone names, with or without the `mixamorig:` prefix
+- `auto`: Score the glTF node names against every concrete profile and use the best match
 - `mimem-unity`: Mimem.ai Unity-style export names
 - `sj-mizuki`: SJ_A-002_MIZUKI-style Mixamo-like names with `Spine3` mapped as `upperChest`
-
-`auto` is accepted as a backwards-compatible alias for `default`; it does not perform best-fit detection.
 
 The converter logs the selected bone mapping profile at the start of each conversion, including whether it came from the default profile or an explicit `--bone-profile` argument:
 
 ```text
 Bone mapping profile: mixamo (resolved to mixamo); reason: default profile
 Bone mapping profile: mimem-unity (resolved to mimem-unity); reason: explicit --bone-profile unity-style
+Bone mapping profile: sj-mizuki (resolved to sj-mizuki); reason: auto-selected best match (52 unique bones, 53 matched nodes, 0 unmatched bone-like nodes; scores: sj-mizuki=5253, mixamo=5242, mimem-unity=-530)
 ```
+
+`auto` is opt-in. If no `--bone-profile` is passed, the converter uses `default`, not best-fit detection.
 
 ### Debugging bone mappings
 

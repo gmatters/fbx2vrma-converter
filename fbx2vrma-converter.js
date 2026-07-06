@@ -169,7 +169,7 @@ class FBXToVRMAConverterFixed {
     this.setupCommands(parse);
     this.boneMappingProfiles = {
       mixamo: {
-        aliases: ['default', 'auto'],
+        aliases: ['default'],
         mapping: MIXAMO_BONE_MAPPING,
         normalizeName: name => name && (name.startsWith('mixamorig:') ? name : `mixamorig:${name}`),
       },
@@ -228,8 +228,6 @@ class FBXToVRMAConverterFixed {
       }
 
       console.log(`Converting ${inputPath} to ${outputPath}...`);
-      this.setBoneProfile(mappingOptions.boneProfile || 'default');
-      this.logBoneProfileSelection(mappingOptions);
       const correctionData = await this.loadCorrectionData(mappingOptions);
       const restPoseData = await this.loadRestPoseData(mappingOptions);
 
@@ -238,6 +236,9 @@ class FBXToVRMAConverterFixed {
 
       // Step 2: Load glTF file
       const gltfData = await fs.readJson(tempGltfPath);
+
+      this.selectBoneProfileForGltf(gltfData, mappingOptions);
+      this.logBoneProfileSelection();
 
       if (debugOptions.dumpNodes) {
         await this.dumpNodes(gltfData, debugOptions.dumpNodes);
@@ -1485,16 +1486,95 @@ class FBXToVRMAConverterFixed {
   setBoneProfile(profileName = 'default') {
     this.boneProfileName = this.resolveBoneProfileName(profileName);
     this.humanoidBoneMapping = this.getBoneProfile(this.boneProfileName).mapping;
+    this.boneProfileSelection = {
+      requestedProfile: profileName,
+      resolvedProfile: this.boneProfileName,
+      reason: profileName === 'default' ? 'default profile' : `explicit --bone-profile ${profileName}`,
+    };
   }
 
-  logBoneProfileSelection(mappingOptions = {}) {
+  selectBoneProfileForGltf(gltfData, mappingOptions = {}) {
     const requestedProfile = mappingOptions.boneProfile || 'default';
-    const resolvedProfile = this.resolveBoneProfileName(requestedProfile);
-    const reason = mappingOptions.boneProfileExplicit
-      ? `explicit --bone-profile ${requestedProfile}`
-      : 'default profile';
-    const aliasText = requestedProfile !== resolvedProfile ? ` (resolved to ${resolvedProfile})` : '';
-    console.log(`Bone mapping profile: ${resolvedProfile}${aliasText}; reason: ${reason}`);
+    if (requestedProfile === 'auto') {
+      const scores = this.scoreBoneProfiles(gltfData.nodes || []);
+      const best = scores[0]?.score > 0
+        ? scores[0]
+        : scores.find(score => score.profileName === 'mixamo');
+      this.boneProfileName = best.profileName;
+      this.humanoidBoneMapping = this.getBoneProfile(this.boneProfileName).mapping;
+      this.boneProfileSelection = {
+        requestedProfile,
+        resolvedProfile: best.profileName,
+        reason: 'auto-selected best match',
+        best,
+        scores,
+      };
+      return;
+    }
+
+    this.setBoneProfile(requestedProfile);
+    this.boneProfileSelection = {
+      requestedProfile,
+      resolvedProfile: this.boneProfileName,
+      reason: mappingOptions.boneProfileExplicit
+        ? `explicit --bone-profile ${requestedProfile}`
+        : 'default profile',
+    };
+  }
+
+  scoreBoneProfiles(nodes = []) {
+    return Object.entries(this.boneMappingProfiles)
+      .map(([profileName, profile]) => {
+        const matchedNodes = [];
+        const uniqueBones = new Set();
+        const unmatchedLikelyBones = [];
+
+        nodes.forEach((node, index) => {
+          const name = node.name;
+          if (!name) return;
+          const vrmBone = this.getVRMBoneNameFromProfile(name, profile);
+          if (vrmBone) {
+            matchedNodes.push({ index, name, vrmBone });
+            uniqueBones.add(vrmBone);
+          } else if (this.isLikelyBoneName(name)) {
+            unmatchedLikelyBones.push({ index, name });
+          }
+        });
+
+        return {
+          profileName,
+          score: uniqueBones.size * 100 + matchedNodes.length - unmatchedLikelyBones.length * 10,
+          uniqueBoneCount: uniqueBones.size,
+          matchedNodeCount: matchedNodes.length,
+          unmatchedLikelyBoneCount: unmatchedLikelyBones.length,
+        };
+      })
+      .sort((a, b) => (
+        b.score - a.score
+        || b.uniqueBoneCount - a.uniqueBoneCount
+        || b.matchedNodeCount - a.matchedNodeCount
+        || a.unmatchedLikelyBoneCount - b.unmatchedLikelyBoneCount
+        || a.profileName.localeCompare(b.profileName)
+      ));
+  }
+
+  logBoneProfileSelection() {
+    const selection = this.boneProfileSelection || {
+      requestedProfile: this.boneProfileName,
+      resolvedProfile: this.boneProfileName,
+      reason: 'default profile',
+    };
+    const aliasText = selection.requestedProfile !== selection.resolvedProfile
+      ? ` (resolved to ${selection.resolvedProfile})`
+      : '';
+    let details = '';
+    if (selection.best) {
+      const scoreSummary = selection.scores
+        .map(score => `${score.profileName}=${score.score}`)
+        .join(', ');
+      details = ` (${selection.best.uniqueBoneCount} unique bones, ${selection.best.matchedNodeCount} matched nodes, ${selection.best.unmatchedLikelyBoneCount} unmatched bone-like nodes; scores: ${scoreSummary})`;
+    }
+    console.log(`Bone mapping profile: ${selection.resolvedProfile}${aliasText}; reason: ${selection.reason}${details}`);
   }
 
   resolveBoneProfileName(profileName = 'default') {

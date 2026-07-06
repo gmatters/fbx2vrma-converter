@@ -112,9 +112,6 @@ describe('generateHumanBones', () => {
 
     converter.setBoneProfile('default');
     assert.equal(converter.getVRMBoneName('mixamorig:Head'), 'head');
-
-    converter.setBoneProfile('auto');
-    assert.equal(converter.getVRMBoneName('mixamorig:Hips'), 'hips');
   });
 
   it('should reject unknown bone mapping profiles', () => {
@@ -132,16 +129,61 @@ describe('generateHumanBones', () => {
     const originalLog = console.log;
     console.log = message => logs.push(message);
     try {
-      converter.setBoneProfile('default');
-      converter.logBoneProfileSelection({ boneProfile: 'default', boneProfileExplicit: false });
-      converter.setBoneProfile('unity-style');
-      converter.logBoneProfileSelection({ boneProfile: 'unity-style', boneProfileExplicit: true });
+      converter.selectBoneProfileForGltf({ nodes: [] }, { boneProfile: 'default', boneProfileExplicit: false });
+      converter.logBoneProfileSelection();
+      converter.selectBoneProfileForGltf({ nodes: [] }, { boneProfile: 'unity-style', boneProfileExplicit: true });
+      converter.logBoneProfileSelection();
     } finally {
       console.log = originalLog;
     }
 
     assert.match(logs[0], /Bone mapping profile: mixamo \(resolved to mixamo\); reason: default profile/);
     assert.match(logs[1], /Bone mapping profile: mimem-unity \(resolved to mimem-unity\); reason: explicit --bone-profile unity-style/);
+  });
+
+  it('should auto-select the best bone mapping profile from node names', () => {
+    const converter = createConverter();
+    const sjGltfData = {
+      nodes: [
+        { name: 'Hips' },
+        { name: 'Spine' },
+        { name: 'Spine1' },
+        { name: 'Spine2' },
+        { name: 'Spine3' },
+        { name: 'Neck' },
+        { name: 'Head' },
+        { name: 'LeftArm' },
+      ],
+    };
+
+    converter.selectBoneProfileForGltf(sjGltfData, { boneProfile: 'auto', boneProfileExplicit: true });
+
+    assert.equal(converter.boneProfileName, 'sj-mizuki');
+    assert.equal(converter.getVRMBoneName('Spine3'), 'upperChest');
+    assert.equal(converter.boneProfileSelection.best.unmatchedLikelyBoneCount, 0);
+
+    const mimemGltfData = {
+      nodes: [
+        { name: 'root.x' },
+        { name: 'spine_01.x' },
+        { name: 'spine_02.x' },
+        { name: 'arm_stretch.l' },
+        { name: 'forearm_stretch.r' },
+      ],
+    };
+
+    converter.selectBoneProfileForGltf(mimemGltfData, { boneProfile: 'auto', boneProfileExplicit: true });
+
+    assert.equal(converter.boneProfileName, 'mimem-unity');
+    assert.equal(converter.getVRMBoneName('root.x'), 'hips');
+  });
+
+  it('should fall back to default mixamo profile when auto has no matches', () => {
+    const converter = createConverter();
+
+    converter.selectBoneProfileForGltf({ nodes: [{ name: 'Camera' }] }, { boneProfile: 'auto', boneProfileExplicit: true });
+
+    assert.equal(converter.boneProfileName, 'mixamo');
   });
 
   it('should map Mimem Unity-style body and finger bones', () => {
