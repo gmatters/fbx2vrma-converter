@@ -92,17 +92,31 @@ Trim points are specified in seconds, matching glTF animation sampler time units
 node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3.75
 ```
 
-If you are choosing loop points in an editor such as Blender, you can specify frame numbers instead. Frame numbers are converted to seconds using `--framerate`.
+If you are choosing loop points in an editor such as Blender, you can specify frame numbers instead. Frame numbers are converted to seconds using the input FBX framerate detected from `GlobalSettings.TimeMode`, or `CustomFrameRate` when the FBX uses a custom time mode.
 
 ```bash
-node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in-frame 45 --trim-out-frame 120 --framerate 30
+node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in-frame 45 --trim-out-frame 120
 ```
 
-Use `--loop-smoothing` to blend the tail of the clip toward the first pose. When smoothing is enabled, the converter ensures a sample exists one frame before the out point based on `--framerate`, adding it only if necessary, but still does not include the exact out pose.
+Use `--loop-smoothing` to blend the tail of the clip toward the first pose. When smoothing is enabled, the converter ensures a sample exists one source-FBX frame before the out point, adding it only if necessary, but still does not include the exact out pose.
 
 ```bash
-node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3.75 --loop-smoothing 0.25 --framerate 30
+node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3.75 --loop-smoothing 0.25
 ```
+
+### Animation framerate
+
+FBX source framerate detection is default-on. The converter reads `GlobalSettings.TimeMode` from the input FBX, uses `CustomFrameRate` for custom time mode, and passes the matching bake option to FBX2glTF:
+
+| Detected source fps | FBX2glTF argument |
+|---:|---|
+| `24` | `--anim-framerate bake24` |
+| `30` | `--anim-framerate bake30` |
+| `60` | `--anim-framerate bake60` |
+
+If the detected source framerate is not supported by FBX2glTF baking, conversion fails with a message like `Detected FBX framerate 25 fps is not supported by FBX2glTF animation baking. Re-run with --bake-framerate <24|30|60>.`
+
+Use `--bake-framerate <24|30|60>` only when you need to override the detected bake rate or when the detected source framerate is unsupported. Frame trim arguments still use the detected input FBX framerate when available.
 
 ### Options
 
@@ -111,11 +125,11 @@ node fbx2vrma-converter.js -i input.fbx -o loop.vrma --trim-in 1.25 --trim-out 3
 | `-i, --input <path>` | Input FBX file or directory (required) | — |
 | `-o, --output <path>` | Output VRMA file or directory | Same directory as input |
 | `--fbx2gltf <path>` | Path to FBX2glTF binary | Auto-detected by OS |
-| `--framerate <fps>` | Animation framerate | `30` |
+| `--bake-framerate <fps>` | Override FBX2glTF baked animation framerate; supported values are `24`, `30`, and `60` | Detected from input FBX |
 | `--trim-in <seconds>` | Trim start time; shifted to output time `0` | — |
 | `--trim-out <seconds>` | Trim end time; exact out pose is excluded | — |
-| `--trim-in-frame <frame>` | Trim start frame, converted with `--framerate` | — |
-| `--trim-out-frame <frame>` | Trim end frame, converted with `--framerate`; exact out pose is excluded | — |
+| `--trim-in-frame <frame>` | Trim start frame, converted with the detected input FBX framerate | — |
+| `--trim-out-frame <frame>` | Trim end frame, converted with the detected input FBX framerate; exact out pose is excluded | — |
 | `--loop-smoothing <seconds>` | Blend tail samples toward the first pose over this duration | `0` |
 | `--no-shift-hip-origin` | Disable shifting hips world X/Z so the reference frame starts at the origin without changing world Y altitude | Enabled |
 | `--bone-profile <name>` | Bone mapping profile to use | `default` |
@@ -295,16 +309,17 @@ NODE
 
 ## How it works
 
-1. Convert FBX → glTF using FBX2glTF
-2. Embed binary buffer as base64
-3. Optionally trim animation samplers and apply loop smoothing
-4. Shift hips world X/Z to origin unless disabled
-5. Analyze animation timing (duration, frame count)
-6. Map source bone names to VRM humanoid bone names
-7. Optionally apply animation rotation corrections and static rest-pose rotations
-8. Filter channels that violate VRMA spec (scale on humanoid bones, translation on non-hips bones)
-9. Strip non-animation scene attachments from nodes
-10. Output as GLB binary
+1. Detect the input FBX framerate from `GlobalSettings.TimeMode` / `CustomFrameRate`
+2. Convert FBX → glTF using FBX2glTF with a matching `--anim-framerate bake24`, `bake30`, or `bake60`
+3. Embed binary buffer as base64
+4. Optionally trim animation samplers and apply loop smoothing
+5. Shift hips world X/Z to origin unless disabled
+6. Analyze animation timing (duration, frame count)
+7. Map source bone names to VRM humanoid bone names
+8. Optionally apply animation rotation corrections and static rest-pose rotations
+9. Filter channels that violate VRMA spec (scale on humanoid bones, translation on non-hips bones)
+10. Strip non-animation scene attachments from nodes
+11. Output as GLB binary
 
 ## Bone mapping
 

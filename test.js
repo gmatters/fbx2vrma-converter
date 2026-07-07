@@ -59,6 +59,18 @@ function createAnimationGltf(times, values, valueType = 'SCALAR') {
   };
 }
 
+function createAsciiFbxGlobalSettings({ timeMode, customFrameRate = -1 }) {
+  return `
+; FBX 7.7.0 project file
+GlobalSettings:  {
+  Properties70:  {
+    P: "TimeMode", "enum", "", "",${timeMode}
+    P: "CustomFrameRate", "double", "Number", "",${customFrameRate}
+  }
+}
+`;
+}
+
 describe('generateHumanBones', () => {
   it('should map Mixamo bone names to VRM humanoid bones', () => {
     const converter = createConverter();
@@ -456,11 +468,11 @@ describe('trimAnimationData', () => {
     assert.deepStrictEqual(values, [5, 10]);
   });
 
-  it('should convert frame trim points to seconds using framerate', () => {
+  it('should convert frame trim points to seconds using source framerate', () => {
     const converter = createConverter();
     const gltfData = createAnimationGltf([0, 0.5, 1, 1.5], [0, 5, 10, 15]);
 
-    converter.trimAnimationData(gltfData, { trimInFrame: 15, trimOutFrame: 45, framerate: 30 });
+    converter.trimAnimationData(gltfData, { trimInFrame: 15, trimOutFrame: 45, sourceFramerate: 30 });
 
     const sampler = gltfData.animations[0].samplers[0];
     const buffers = converter.decodeBuffers(gltfData);
@@ -476,7 +488,7 @@ describe('trimAnimationData', () => {
     const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
 
     assert.throws(
-      () => converter.trimAnimationData(gltfData, { trimIn: 1, trimOutFrame: 60, framerate: 30 }),
+      () => converter.trimAnimationData(gltfData, { trimIn: 1, trimOutFrame: 60, sourceFramerate: 30 }),
       /Use either seconds trim options or frame trim options/
     );
   });
@@ -485,7 +497,7 @@ describe('trimAnimationData', () => {
     const converter = createConverter();
     const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
 
-    converter.trimAnimationData(gltfData, { trimIn: 0, trimOut: 3, loopSmoothing: 2, framerate: 2 });
+    converter.trimAnimationData(gltfData, { trimIn: 0, trimOut: 3, loopSmoothing: 2, sourceFramerate: 2 });
 
     const sampler = gltfData.animations[0].samplers[0];
     const buffers = converter.decodeBuffers(gltfData);
@@ -497,6 +509,87 @@ describe('trimAnimationData', () => {
     assert.equal(values[1], 10);
     assert.ok(values[2] < 20 && values[2] > 0);
     assert.ok(values[3] < values[2] && values[3] > 0);
+  });
+});
+
+describe('FBX framerate detection', () => {
+  const { mkdtempSync, writeFileSync, rmSync } = require('fs');
+  const path = require('path');
+  const tmpdir = require('os').tmpdir;
+
+  function withAsciiFbx(contents, fn) {
+    const dir = mkdtempSync(tmpdir() + '/fbx2vrma-fps-test-');
+    const file = path.join(dir, 'motion.fbx');
+    try {
+      writeFileSync(file, contents);
+      return fn(file);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  }
+
+  it('should detect source fps from GlobalSettings.TimeMode', () => {
+    const converter = createConverter();
+
+    withAsciiFbx(createAsciiFbxGlobalSettings({ timeMode: 6 }), file => {
+      const detected = converter.detectFBXFrameRate(file);
+
+      assert.equal(detected.fps, 30);
+      assert.equal(detected.timeMode, 6);
+    });
+  });
+
+  it('should use CustomFrameRate when TimeMode is custom', () => {
+    const converter = createConverter();
+
+    withAsciiFbx(createAsciiFbxGlobalSettings({ timeMode: 14, customFrameRate: 60 }), file => {
+      const detected = converter.detectFBXFrameRate(file);
+
+      assert.equal(detected.fps, 60);
+      assert.equal(detected.customFrameRate, 60);
+    });
+  });
+
+  it('should select a matching FBX2glTF bake rate for supported source fps', () => {
+    const converter = createConverter();
+
+    withAsciiFbx(createAsciiFbxGlobalSettings({ timeMode: 11 }), file => {
+      const frameRate = converter.resolveFBXFrameRate(file);
+
+      assert.equal(frameRate.sourceFps, 24);
+      assert.equal(frameRate.bakeFps, 24);
+    });
+  });
+
+  it('should require an explicit bake override for unsupported source fps', () => {
+    const converter = createConverter();
+
+    withAsciiFbx(createAsciiFbxGlobalSettings({ timeMode: 10 }), file => {
+      assert.throws(
+        () => converter.resolveFBXFrameRate(file),
+        /not supported by FBX2glTF/
+      );
+    });
+  });
+
+  it('should allow explicit bake override while preserving detected source fps for trim math', () => {
+    const converter = createConverter();
+
+    withAsciiFbx(createAsciiFbxGlobalSettings({ timeMode: 10 }), file => {
+      const frameRate = converter.resolveFBXFrameRate(file, 30);
+
+      assert.equal(frameRate.sourceFps, 25);
+      assert.equal(frameRate.bakeFps, 30);
+    });
+  });
+
+  it('should reject unsupported bake override values', () => {
+    const converter = createConverter();
+
+    assert.throws(
+      () => converter.parseBakeFramerateOverride(25),
+      /--bake-framerate must be one of/
+    );
   });
 });
 
@@ -621,6 +714,7 @@ describe('enhanceAnimationTiming', () => {
 
     assert.equal(result.extras.animationMetadata.maxDuration, 3.0);
     assert.equal(result.extras.animationMetadata.framerate, 30);
+    assert.equal(result.extras.animationMetadata.sourceFramerate, 30);
     assert.equal(result.extras.animationMetadata.frameCount, 90); // ceil(3.0 * 30)
   });
 
@@ -920,6 +1014,7 @@ describe('convertToVRMAWithTiming', () => {
         animationMetadata: {
           maxDuration: 2.0,
           framerate: 30,
+          sourceFramerate: 30,
           frameCount: 60,
         },
       },
@@ -937,6 +1032,7 @@ describe('convertToVRMAWithTiming', () => {
     assert.equal(vrma.extras.duration, 2.0);
     assert.equal(vrma.extras.frameCount, 60);
     assert.equal(vrma.extras.framerate, 30);
+    assert.equal(vrma.extras.sourceFramerate, 30);
     // ジオメトリ系フィールドが含まれないこと
     assert.equal(vrma.materials, undefined);
     assert.equal(vrma.meshes, undefined);
@@ -1047,6 +1143,7 @@ describe('convertToVRMAWithTiming', () => {
 
     assert.equal(vrma.extras.duration, 5.0);
     assert.equal(vrma.extras.framerate, 30);
+    assert.equal(vrma.extras.sourceFramerate, 30);
     assert.equal(vrma.extras.frameCount, 0);
   });
 
@@ -1159,8 +1256,7 @@ describe('convert (validation)', () => {
     const result = await converter.convert(
       '/nonexistent/file.fbx',
       '/tmp/output.vrma',
-      './FBX2glTF-darwin-x64',
-      '30'
+      './FBX2glTF-darwin-x64'
     );
     assert.equal(result, false);
   });
@@ -1171,8 +1267,7 @@ describe('convert (validation)', () => {
     const result = await converter.convert(
       './test.js',
       '/tmp/output.vrma',
-      '/nonexistent/FBX2glTF',
-      '30'
+      '/nonexistent/FBX2glTF'
     );
     assert.equal(result, false);
   });
@@ -1221,7 +1316,7 @@ describe('convertDirectory', () => {
     // 空のディレクトリを使う
     const dir = mkdtempSync(tmpdir() + '/fbx2vrma-test-');
     try {
-      const result = await converter.convertDirectory(dir, dir + '/out', './FBX2glTF-darwin-x64', '30');
+      const result = await converter.convertDirectory(dir, dir + '/out', './FBX2glTF-darwin-x64');
       assert.equal(result, false);
     } finally {
       rmSync(dir, { recursive: true });

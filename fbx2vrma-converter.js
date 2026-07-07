@@ -31,6 +31,27 @@ const ACCESSOR_COMPONENTS = {
   MAT4: 16,
 };
 
+const FBX_TIME_MODE_FPS = {
+  1: 120,
+  2: 100,
+  3: 60,
+  4: 50,
+  5: 48,
+  6: 30,
+  7: 29.97,
+  8: 29.97,
+  9: 30,
+  10: 25,
+  11: 24,
+  12: 1000,
+  13: 24,
+  15: 96,
+  16: 72,
+  17: 59.94,
+};
+const FBX_TIME_MODE_CUSTOM = 14;
+const SUPPORTED_FBX2GLTF_BAKE_FPS = [24, 30, 60];
+
 const MIXAMO_BONE_MAPPING = {
   'mixamorig:Hips': 'hips',
   'mixamorig:Spine': 'spine',
@@ -195,11 +216,11 @@ class FBXToVRMAConverterFixed {
       .requiredOption('-i, --input <path>', 'Input FBX file path')
       .option('-o, --output <path>', 'Output VRMA file path (default: same name as input with .vrma extension)')
       .option('--fbx2gltf <path>', 'Path to FBX2glTF binary', `./${getDefaultBinaryName()}`)
-      .option('--framerate <fps>', 'Animation framerate', '30')
+      .option('--bake-framerate <fps>', 'Override FBX2glTF baked animation framerate; supported values: 24, 30, 60')
       .option('--trim-in <seconds>', 'Trim start time in seconds')
       .option('--trim-out <seconds>', 'Trim end time in seconds')
-      .option('--trim-in-frame <frame>', 'Trim start frame, converted to seconds using --framerate')
-      .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using --framerate')
+      .option('--trim-in-frame <frame>', 'Trim start frame, converted to seconds using the input FBX framerate')
+      .option('--trim-out-frame <frame>', 'Trim end frame, converted to seconds using the input FBX framerate')
       .option('--loop-smoothing <seconds>', 'Blend this many seconds before the loop point toward the first pose', '0')
       .option('--no-shift-hip-origin', 'Disable shifting hip translation X/Z so the animation starts at the origin')
       .option('--bone-profile <name>', 'Bone mapping profile to use', 'default')
@@ -212,7 +233,7 @@ class FBXToVRMAConverterFixed {
     }
   }
 
-  async convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}, mappingOptions = {}) {
+  async convert(inputPath, outputPath, fbx2gltfPath, trimOptions = {}, debugOptions = {}, mappingOptions = {}) {
     // Declared outside try so it's accessible in finally
     const tempGltfPath = path.join(path.dirname(outputPath), `temp_${Date.now()}.gltf`);
     try {
@@ -227,12 +248,14 @@ class FBXToVRMAConverterFixed {
         throw new Error(`FBX2glTF binary not found: ${fbx2gltfFullPath}\nRun 'npm run setup' to download it.`);
       }
 
+      const frameRate = this.resolveFBXFrameRate(inputPath, mappingOptions.bakeFramerate);
       console.log(`Converting ${inputPath} to ${outputPath}...`);
+      console.log(`Detected FBX framerate: ${frameRate.sourceFps} fps; baking animation at ${frameRate.bakeFps} fps`);
       const correctionData = await this.loadCorrectionData(mappingOptions);
       const restPoseData = await this.loadRestPoseData(mappingOptions);
 
       // Step 1: Convert FBX to glTF (JSON + embedded)
-      await this.convertFBXToGLTF(inputPath, tempGltfPath, fbx2gltfPath);
+      await this.convertFBXToGLTF(inputPath, tempGltfPath, fbx2gltfPath, frameRate.bakeFps);
 
       // Step 2: Load glTF file
       const gltfData = await fs.readJson(tempGltfPath);
@@ -248,7 +271,10 @@ class FBXToVRMAConverterFixed {
       const embeddedGltfData = await this.embedBinaryData(gltfData, path.dirname(tempGltfPath));
 
       // Step 4: Trim animation data before timing metadata is calculated
-      const trimmedGltfData = this.trimAnimationData(embeddedGltfData, trimOptions);
+      const trimmedGltfData = this.trimAnimationData(embeddedGltfData, {
+        ...trimOptions,
+        sourceFramerate: frameRate.sourceFps,
+      });
 
       // Step 5: Shift hip locomotion to begin at X/Z origin unless explicitly disabled
       const originShiftedGltfData = this.shiftHipTranslationXZToOrigin(trimmedGltfData, {
@@ -257,7 +283,7 @@ class FBXToVRMAConverterFixed {
       });
 
       // Step 6: Analyze and enhance animation timing
-      const enhancedGltfData = this.enhanceAnimationTiming(originShiftedGltfData, parseInt(framerate));
+      const enhancedGltfData = this.enhanceAnimationTiming(originShiftedGltfData, frameRate.bakeFps, frameRate.sourceFps);
 
       // Step 7: Convert to VRMA format
       const vrmaData = this.convertToVRMAWithTiming(enhancedGltfData, { correctionData, restPoseData });
@@ -276,59 +302,242 @@ class FBXToVRMAConverterFixed {
     }
   }
 
-  async convertFBXToGLTF(inputPath, outputPath, fbx2gltfPath) {
+  resolveFBXFrameRate(inputPath, bakeFramerateOverride) {
+    const detected = this.detectFBXFrameRate(inputPath);
+    const override = this.parseBakeFramerateOverride(bakeFramerateOverride);
+    const sourceFps = detected?.fps ?? override;
+
+    if (!sourceFps) {
+      throw new Error('Could not detect FBX framerate. Re-run with --bake-framerate <24|30|60> to choose an explicit bake rate.');
+    }
+
+    const detectedBakeFps = this.toSupportedBakeFramerate(sourceFps);
+    if (!detectedBakeFps && !override) {
+      throw new Error(`Detected FBX framerate ${sourceFps} fps is not supported by FBX2glTF animation baking. Re-run with --bake-framerate <24|30|60>.`);
+    }
+
+    const bakeFps = override ?? detectedBakeFps;
+    if (!bakeFps) {
+      throw new Error(`No supported FBX2glTF bake framerate selected for detected FBX framerate ${sourceFps} fps.`);
+    }
+    if (override && detected?.fps && Math.abs(override - detected.fps) > 1e-4) {
+      console.warn(`Warning: detected FBX framerate is ${detected.fps} fps, but baking at explicit override ${override} fps. Frame trim arguments still use ${detected.fps} fps.`);
+    }
+
+    return {
+      sourceFps,
+      bakeFps,
+      timeMode: detected?.timeMode,
+      customFrameRate: detected?.customFrameRate,
+    };
+  }
+
+  parseBakeFramerateOverride(value) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const fps = parseOptionalNumber(value, '--bake-framerate');
+    const bakeFps = this.toSupportedBakeFramerate(fps);
+    if (!bakeFps || Math.abs(fps - bakeFps) > 1e-4) {
+      throw new Error('--bake-framerate must be one of: 24, 30, 60');
+    }
+    return bakeFps;
+  }
+
+  toSupportedBakeFramerate(fps) {
+    if (!Number.isFinite(fps)) return undefined;
+    return SUPPORTED_FBX2GLTF_BAKE_FPS.find(supported => Math.abs(fps - supported) < 1e-4);
+  }
+
+  detectFBXFrameRate(inputPath) {
+    const data = fs.readFileSync(inputPath);
+    const settings = data.subarray(0, 23).toString('binary') === 'Kaydara FBX Binary  \0\x1a\0'
+      ? this.readBinaryFBXGlobalSettings(data)
+      : this.readAsciiFBXGlobalSettings(data.toString('utf8'));
+    if (settings.timeMode === undefined) {
+      return undefined;
+    }
+    const fps = settings.timeMode === FBX_TIME_MODE_CUSTOM
+      ? settings.customFrameRate
+      : FBX_TIME_MODE_FPS[settings.timeMode];
+    if (!Number.isFinite(fps) || fps <= 0) {
+      return undefined;
+    }
+    return {
+      fps,
+      timeMode: settings.timeMode,
+      customFrameRate: settings.customFrameRate,
+    };
+  }
+
+  readAsciiFBXGlobalSettings(text) {
+    const settings = {};
+    const timeMode = text.match(/P:\s*"TimeMode"\s*,\s*"enum"\s*,\s*""\s*,\s*""\s*,\s*(-?\d+)/);
+    const customFrameRate = text.match(/P:\s*"CustomFrameRate"\s*,\s*"double"\s*,\s*"Number"\s*,\s*""\s*,\s*(-?\d+(?:\.\d+)?)/);
+    if (timeMode) settings.timeMode = Number(timeMode[1]);
+    if (customFrameRate) settings.customFrameRate = Number(customFrameRate[1]);
+    return settings;
+  }
+
+  readBinaryFBXGlobalSettings(data) {
+    const version = data.readUInt32LE(23);
+    const is64Bit = version >= 7500;
+    const settings = {};
+    const readEndOffset = offset => is64Bit ? Number(data.readBigUInt64LE(offset)) : data.readUInt32LE(offset);
+    const headerLength = is64Bit ? 25 : 13;
+    const propsOffset = is64Bit ? 8 : 4;
+    const nameLengthOffset = is64Bit ? 24 : 12;
+
+    const readProperty = offset => {
+      const type = String.fromCharCode(data[offset]);
+      let cursor = offset + 1;
+      let value;
+      switch (type) {
+        case 'C':
+          value = Boolean(data[cursor]);
+          cursor += 1;
+          break;
+        case 'Y':
+          value = data.readInt16LE(cursor);
+          cursor += 2;
+          break;
+        case 'I':
+          value = data.readInt32LE(cursor);
+          cursor += 4;
+          break;
+        case 'F':
+          value = data.readFloatLE(cursor);
+          cursor += 4;
+          break;
+        case 'D':
+          value = data.readDoubleLE(cursor);
+          cursor += 8;
+          break;
+        case 'L':
+          value = Number(data.readBigInt64LE(cursor));
+          cursor += 8;
+          break;
+        case 'S':
+        case 'R': {
+          const length = data.readUInt32LE(cursor);
+          cursor += 4;
+          value = type === 'S' ? data.toString('utf8', cursor, cursor + length) : undefined;
+          cursor += length;
+          break;
+        }
+        case 'b':
+        case 'c':
+        case 'd':
+        case 'f':
+        case 'i':
+        case 'l': {
+          const compressedLength = data.readUInt32LE(cursor + 8);
+          cursor += 12 + compressedLength;
+          value = undefined;
+          break;
+        }
+        default:
+          throw new Error(`Unsupported FBX property type '${type}' while reading framerate metadata`);
+      }
+      return { value, nextOffset: cursor };
+    };
+
+    const walkNode = (offset, ancestors = []) => {
+      const endOffset = readEndOffset(offset);
+      if (endOffset === 0 || endOffset > data.length) return endOffset || data.length;
+
+      const propCount = is64Bit ? Number(data.readBigUInt64LE(offset + propsOffset)) : data.readUInt32LE(offset + propsOffset);
+      const nameLength = data[offset + nameLengthOffset];
+      let cursor = offset + headerLength;
+      const name = data.toString('utf8', cursor, cursor + nameLength);
+      cursor += nameLength;
+
+      const props = [];
+      for (let i = 0; i < propCount; i++) {
+        const property = readProperty(cursor);
+        props.push(property.value);
+        cursor = property.nextOffset;
+      }
+
+      if (name === 'P' && ancestors[ancestors.length - 1] === 'Properties70' && ancestors.includes('GlobalSettings')) {
+        if (props[0] === 'TimeMode') settings.timeMode = props[4];
+        if (props[0] === 'CustomFrameRate') settings.customFrameRate = props[4];
+      }
+
+      const childAncestors = [...ancestors, name];
+      while (cursor < endOffset) {
+        const next = walkNode(cursor, childAncestors);
+        if (next <= cursor) break;
+        cursor = next;
+      }
+      return endOffset;
+    };
+
+    let cursor = 27;
+    while (cursor < data.length && (settings.timeMode === undefined || settings.customFrameRate === undefined)) {
+      const next = walkNode(cursor);
+      if (next <= cursor) break;
+      cursor = next;
+    }
+    return settings;
+  }
+
+  async convertFBXToGLTF(inputPath, outputPath, fbx2gltfPath, bakeFps) {
     const fbx2gltfFullPath = path.resolve(fbx2gltfPath);
     const outputDir = path.dirname(outputPath);
     const outputName = path.basename(outputPath, '.gltf');
 
     // Run FBX2glTF with embedded output
-    const args = ['-i', inputPath, '-o', path.join(outputDir, outputName), '--embed'];
+    const args = ['-i', inputPath, '-o', path.join(outputDir, outputName), '--embed', '--anim-framerate', `bake${bakeFps}`];
     console.log(`Executing: ${fbx2gltfFullPath} ${args.join(' ')}`);
 
     try {
       execFileSync(fbx2gltfFullPath, args, { stdio: 'pipe' });
-
-      const actualOutputPath = path.join(outputDir, `${outputName}_out`, `${outputName}.gltf`);
-      if (await fs.pathExists(actualOutputPath)) {
-        await fs.move(actualOutputPath, outputPath);
-        // Remove temp directory
-        await fs.remove(path.join(outputDir, `${outputName}_out`));
-      }
     } catch (error) {
+      if (await this.moveFBX2GLTFOutput(outputDir, outputName, outputPath)) {
+        return;
+      }
       // Fall back to normal conversion if embed fails
       console.log('Embed failed, trying normal conversion...');
-      await this.convertFBXToGLTFNormal(inputPath, outputPath, fbx2gltfPath);
+      await this.convertFBXToGLTFNormal(inputPath, outputPath, fbx2gltfPath, bakeFps);
+      return;
     }
+
+    await this.moveFBX2GLTFOutput(outputDir, outputName, outputPath);
   }
 
-  async convertFBXToGLTFNormal(inputPath, outputPath, fbx2gltfPath) {
+  async convertFBXToGLTFNormal(inputPath, outputPath, fbx2gltfPath, bakeFps) {
     const fbx2gltfFullPath = path.resolve(fbx2gltfPath);
     const outputDir = path.dirname(outputPath);
     const outputName = path.basename(outputPath, '.gltf');
 
-    const args = ['-i', inputPath, '-o', path.join(outputDir, outputName)];
+    const args = ['-i', inputPath, '-o', path.join(outputDir, outputName), '--anim-framerate', `bake${bakeFps}`];
 
     try {
       execFileSync(fbx2gltfFullPath, args, { stdio: 'pipe' });
 
-      const actualOutputPath = path.join(outputDir, `${outputName}_out`, `${outputName}.gltf`);
-      if (await fs.pathExists(actualOutputPath)) {
-        await fs.move(actualOutputPath, outputPath);
-        // Move the .bin file as well
-        const actualBinPath = path.join(outputDir, `${outputName}_out`, 'buffer.bin');
-        const targetBinPath = path.join(outputDir, `${outputName}.bin`);
-        if (await fs.pathExists(actualBinPath)) {
-          await fs.move(actualBinPath, targetBinPath);
-        }
-        // Remove temp directory
-        await fs.remove(path.join(outputDir, `${outputName}_out`));
-      }
+      await this.moveFBX2GLTFOutput(outputDir, outputName, outputPath);
     } catch (error) {
       throw new Error(`FBX2glTF conversion failed: ${error.message}`);
     }
   }
 
-  enhanceAnimationTiming(gltfData, framerate) {
+  async moveFBX2GLTFOutput(outputDir, outputName, outputPath) {
+    const outputFolder = path.join(outputDir, `${outputName}_out`);
+    const actualOutputPath = path.join(outputFolder, `${outputName}.gltf`);
+    if (!await fs.pathExists(actualOutputPath)) {
+      return false;
+    }
+
+    await fs.move(actualOutputPath, outputPath, { overwrite: true });
+    const actualBinPath = path.join(outputFolder, 'buffer.bin');
+    const targetBinPath = path.join(outputDir, `${outputName}.bin`);
+    if (await fs.pathExists(actualBinPath)) {
+      await fs.move(actualBinPath, targetBinPath, { overwrite: true });
+    }
+    await fs.remove(outputFolder);
+    return true;
+  }
+
+  enhanceAnimationTiming(gltfData, framerate, sourceFramerate = framerate) {
     console.log('Enhancing animation timing data...');
 
     if (!gltfData.animations || gltfData.animations.length === 0) {
@@ -371,6 +580,7 @@ class FBXToVRMAConverterFixed {
     gltfData.extras.animationMetadata = {
       maxDuration: maxDuration,
       framerate: framerate,
+      sourceFramerate: sourceFramerate,
       frameCount: Math.ceil(maxDuration * framerate),
       calculatedAt: new Date().toISOString()
     };
@@ -478,7 +688,7 @@ class FBXToVRMAConverterFixed {
     const trimInFrame = parseOptionalNumber(options.trimInFrame, '--trim-in-frame');
     const trimOutFrame = parseOptionalNumber(options.trimOutFrame, '--trim-out-frame');
     const loopSmoothing = parseOptionalNumber(options.loopSmoothing, '--loop-smoothing') ?? 0;
-    const framerate = parseOptionalNumber(options.framerate, '--framerate') ?? 30;
+    const sourceFramerate = parseOptionalNumber(options.sourceFramerate, 'source framerate');
     const usesSeconds = trimIn !== undefined || trimOut !== undefined;
     const usesFrames = trimInFrame !== undefined || trimOutFrame !== undefined;
 
@@ -500,8 +710,14 @@ class FBXToVRMAConverterFixed {
     if (loopSmoothing < 0) {
       throw new Error('--loop-smoothing must be greater than or equal to 0');
     }
-    if (framerate <= 0) {
-      throw new Error('--framerate must be greater than 0');
+    if (usesFrames && !sourceFramerate) {
+      throw new Error('Input FBX framerate is required when using --trim-in-frame or --trim-out-frame');
+    }
+    if (loopSmoothing > 0 && !sourceFramerate) {
+      throw new Error('Input FBX framerate is required when using --loop-smoothing');
+    }
+    if (sourceFramerate !== undefined && sourceFramerate <= 0) {
+      throw new Error('Input FBX framerate must be greater than 0');
     }
     if (trimInFrame !== undefined && trimInFrame < 0) {
       throw new Error('--trim-in-frame must be greater than or equal to 0');
@@ -516,10 +732,10 @@ class FBXToVRMAConverterFixed {
       return gltfData;
     }
 
-    const start = usesFrames ? (trimInFrame ?? 0) / framerate : (trimIn ?? 0);
+    const start = usesFrames ? (trimInFrame ?? 0) / sourceFramerate : (trimIn ?? 0);
     const fallbackEnd = this.getAnimationDuration(gltfData);
     const end = usesFrames
-      ? (trimOutFrame !== undefined ? trimOutFrame / framerate : fallbackEnd)
+      ? (trimOutFrame !== undefined ? trimOutFrame / sourceFramerate : fallbackEnd)
       : (trimOut ?? fallbackEnd);
     if (!(end > start)) {
       throw new Error('Trim range must have a positive duration');
@@ -530,7 +746,7 @@ class FBXToVRMAConverterFixed {
     const buffers = this.decodeBuffers(gltfData);
     for (const animation of gltfData.animations) {
       for (const sampler of animation.samplers || []) {
-        this.trimSampler(gltfData, buffers, sampler, start, end, loopSmoothing, framerate);
+        this.trimSampler(gltfData, buffers, sampler, start, end, loopSmoothing, sourceFramerate);
       }
     }
     this.encodeBuffers(gltfData, buffers);
@@ -979,7 +1195,8 @@ class FBXToVRMAConverterFixed {
       extras: {
         duration: animationDuration,
         frameCount: metadata?.frameCount ?? 0,
-        framerate: metadata?.framerate ?? 30
+        framerate: metadata?.framerate ?? 30,
+        sourceFramerate: metadata?.sourceFramerate ?? metadata?.framerate ?? 30
       }
     };
 
@@ -1646,7 +1863,7 @@ class FBXToVRMAConverterFixed {
     console.log(`Saved GLB: ${totalLength} bytes (JSON: ${jsonPadded}, BIN: ${binPadded})`);
   }
 
-  async convertDirectory(inputDir, outputDir, fbx2gltfPath, framerate, trimOptions = {}, debugOptions = {}, mappingOptions = {}) {
+  async convertDirectory(inputDir, outputDir, fbx2gltfPath, trimOptions = {}, debugOptions = {}, mappingOptions = {}) {
     const entries = await fs.readdir(inputDir);
     const fbxFiles = entries.filter(f => path.extname(f).toLowerCase() === '.fbx');
 
@@ -1667,7 +1884,7 @@ class FBXToVRMAConverterFixed {
       if (debugOptions.dumpNodes) {
         fileDebugOptions.dumpNodes = this.resolveBatchDebugOutputPath(debugOptions.dumpNodes, file, '.txt');
       }
-      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, framerate, trimOptions, fileDebugOptions, mappingOptions);
+      const ok = await this.convert(inputPath, outputPath, fbx2gltfPath, trimOptions, fileDebugOptions, mappingOptions);
       if (ok) successCount++;
     }
 
@@ -1728,7 +1945,6 @@ class FBXToVRMAConverterFixed {
       trimInFrame: options.trimInFrame,
       trimOutFrame: options.trimOutFrame,
       loopSmoothing: options.loopSmoothing,
-      framerate: options.framerate,
     };
     const debugOptions = {
       dumpNodes: options.dumpNodes,
@@ -1739,6 +1955,7 @@ class FBXToVRMAConverterFixed {
       applyCorrections: options.applyCorrections,
       applyRestPose: options.applyRestPose,
       shiftHipOrigin: options.shiftHipOrigin,
+      bakeFramerate: options.bakeFramerate,
     };
 
     let success;
@@ -1749,7 +1966,6 @@ class FBXToVRMAConverterFixed {
         options.input,
         outputDir,
         options.fbx2gltf,
-        options.framerate,
         trimOptions,
         debugOptions,
         mappingOptions
@@ -1761,7 +1977,6 @@ class FBXToVRMAConverterFixed {
         options.input,
         outputPath,
         options.fbx2gltf,
-        options.framerate,
         trimOptions,
         debugOptions,
         mappingOptions
