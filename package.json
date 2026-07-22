@@ -4,10 +4,12 @@
   "description": "Convert FBX animation files to VRMA format for VRM models. Works with Mixamo animations and @pixiv/three-vrm-animation.",
   "main": "fbx2vrma-converter.js",
   "bin": {
-    "fbx2vrma": "./fbx2vrma-converter.js"
+    "fbx2vrma": "./fbx2vrma-converter.js",
+    "vrma-batch": "./vrma-batch.js"
   },
   "scripts": {
     "start": "node fbx2vrma-converter.js",
+    "batch": "node vrma-batch.js",
     "setup": "./setup.sh",
     "postinstall": "node scripts/postinstall.js",
     "test": "node --test test.js"
@@ -43,7 +45,9 @@
   },
   "dependencies": {
     "commander": "^11.1.0",
-    "fs-extra": "^11.2.0"
+    "fast-glob": "^3.3.3",
+    "fs-extra": "^11.2.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {},
   "os": [

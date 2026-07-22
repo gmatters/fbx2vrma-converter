@@ -84,6 +84,84 @@ node fbx2vrma-converter.js -i ./FBX/ -o ./VRMA/
 
 Output filenames are derived from the input filenames (`Walk.fbx` → `Walk.vrma`).
 
+### Recipe batch builds
+
+Use `vrma-batch.js` when you want curated, reproducible outputs that rebuild only when stale.
+
+```bash
+node vrma-batch.js --dry-run
+node vrma-batch.js
+node vrma-batch.js --force
+node vrma-batch.js recipes/alternate.yaml --dry-run
+```
+
+Each generated output gets a sidecar manifest next to it, for example `F-001-MIZUKI.vrma.build.json`. An output is fresh only when the sidecar still matches the normalized recipe, selected input file path, input file SHA-256, converter SHA-256, configured FBX2glTF binary SHA-256, generated converter argv, and referenced correction/rest-pose config file hashes. This means edits to trim points, loop smoothing, selected input version, overwritten FBX contents, correction/rest-pose JSON, `fbx2vrma-converter.js`, or the configured FBX2glTF binary make the output stale.
+
+Minimal recipe:
+
+```yaml
+defaults:
+  converter: ../fbx2vrma-converter.js
+  fbx2gltf: ../FBX2glTF-linux-x64
+  inputDir: /root/bulk
+  outputDir: /root/bulk
+  args:
+    boneProfile: auto
+    shiftHipOrigin: false
+
+builds:
+  - name: 2-actor full scene
+    loopSmoothing: 0
+    inFrame: 860
+    outFrame: 8766
+    outputs:
+      - input: F-001_MIZUKI_v*.fbx
+        output: F-001_MIZUKI_trimmed.vrma
+      - input: F-001_SHIRATAMA_v*.fbx
+        output: F-001_SHIRATAMA_trimmed.vrma
+```
+
+When `input` is a glob such as `*_v*.fbx`, the batch runner selects the highest trailing version and stores that concrete input path in the sidecar. Versions use a major number with an optional alphabet suffix, so `_v20f` beats `_v20e` and `_v9k`, and `_v12` beats `_v4`. Adding a newer version makes the existing output stale.
+
+To pin a glob to one version, use an input object:
+
+```yaml
+input:
+  pattern: F-001_MIZUKI_v*.fbx
+  version: 20f
+```
+
+Properties inherit through nested `builds` / `outputs` blocks. A leaf is any entry with an `output` and no nested `outputs`; its input and conversion options come from `defaults` plus parent overrides plus its own inline overrides. `id` is optional; when omitted, it is generated from the output filename without extension.
+
+For example, one input can share centering and smoothing settings while each output keeps its own loop points inline:
+
+```yaml
+builds:
+  - input: F-001_MIZUKI_v*.fbx
+    shiftHipOrigin: true
+    loopSmoothing: 0.2
+    outputs:
+      - inFrame: 860
+        outFrame: 1860
+        output: F-001_MIZUKI_loop_1.vrma
+      - inFrame: 2860
+        outFrame: 3860
+        output: F-001_MIZUKI_loop_2.vrma
+```
+
+Recipe fields map to converter flags:
+
+| Recipe field | Converter flag |
+|---|---|
+| `args.boneProfile` | `--bone-profile` |
+| `args.shiftHipOrigin: false` | `--no-shift-hip-origin` |
+| `trim.in`, `trim.out` | `--trim-in`, `--trim-out` |
+| `trim.inFrame`, `trim.outFrame` | `--trim-in-frame`, `--trim-out-frame` |
+| `trim.loopSmoothing` | `--loop-smoothing` |
+| `corrections` or `args.corrections` | `--apply-corrections` |
+| `restPose` or `args.restPose` | `--apply-rest-pose` |
+| `args.bakeFramerate` | `--bake-framerate` |
+
 ### Loop trimming
 
 Trim points are specified in seconds, matching glTF animation sampler time units. The converter shifts the trimmed in point to time `0` and excludes the exact out point to avoid duplicating the loop pose.
@@ -173,6 +251,7 @@ Default-on passes:
 - `--no-shift-hip-origin` disables the default hip-origin shift. When enabled, the converter shifts hips world X/Z so the reference sample starts at horizontal origin while preserving world Y altitude. If trim-in is specified, that trimmed first sample is used as the reference; otherwise the second sample is used because the first frame may be exceptional.
 - VRMA compliance filtering always removes scale animation channels on humanoid bones and translation animation channels on humanoid bones other than `hips`.
 - VRMA node cleanup always strips non-animation scene attachments from output nodes. Output nodes keep only `name`, `children`, `translation`, and `rotation`.
+- Animation buffer compaction always removes stale or duplicate animation accessors before writing the VRMA. This keeps trimmed outputs from carrying original untrimmed keyframe bytes. Successful compaction logs `Compacted animation buffers to ... referenced accessor(s), ... bytes` and may also report reused duplicate accessor references.
 - Ancestor-transform reporting always logs non-humanoid parent/wrapper nodes that affect mapped humanoid world transforms. These nodes can affect the final world position or rotation through static translation/rotation/scale/matrix values or through animation channels targeting the wrapper node.
 
 Opt-in passes:
@@ -318,8 +397,9 @@ NODE
 7. Map source bone names to VRM humanoid bone names
 8. Optionally apply animation rotation corrections and static rest-pose rotations
 9. Filter channels that violate VRMA spec (scale on humanoid bones, translation on non-hips bones)
-10. Strip non-animation scene attachments from nodes
-11. Output as GLB binary
+10. Compact animation buffers so only referenced, non-duplicate animation accessors remain
+11. Strip non-animation scene attachments from nodes
+12. Output as GLB binary
 
 ## Bone mapping
 

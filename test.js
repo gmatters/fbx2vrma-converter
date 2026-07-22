@@ -3,6 +3,16 @@ const assert = require('node:assert/strict');
 const os = require('os');
 const FBXToVRMAConverterFixed = require('./fbx2vrma-converter');
 const { getDefaultBinaryName } = require('./fbx2vrma-converter');
+const {
+  compareVersions,
+  createBuildSpec,
+  expandRecipeDocument,
+  explainFreshness,
+  parseVersion,
+  parseVersionToken,
+  sidecarPath,
+  writeSidecar,
+} = require('./lib/batch-runner');
 
 function createConverter() {
   return new FBXToVRMAConverterFixed();
@@ -70,6 +80,208 @@ GlobalSettings:  {
 }
 `;
 }
+
+describe('vrma-batch recipes', () => {
+  const { mkdtempSync, writeFileSync, rmSync } = require('fs');
+  const path = require('path');
+  const tmpdir = require('os').tmpdir;
+
+  async function withBatchFixture(fn) {
+    const dir = mkdtempSync(tmpdir() + '/vrma-batch-test-');
+    try {
+      const inputDir = path.join(dir, 'inputs');
+      const outputDir = path.join(dir, 'outputs');
+      require('fs').mkdirSync(inputDir);
+      require('fs').mkdirSync(outputDir);
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v3.fbx'), 'v3');
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v12.fbx'), 'v12');
+      writeFileSync(path.join(dir, 'converter.js'), 'converter');
+      writeFileSync(path.join(dir, 'rest.json'), '{}');
+      return await fn({ dir, inputDir, outputDir });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('should parse numeric versions with optional alphabet suffixes', () => {
+    assert.deepStrictEqual(parseVersion('/x/F-001_MIZUKI_v3.fbx'), { major: 3, suffix: '' });
+    assert.deepStrictEqual(parseVersion('/x/F-001_MIZUKI_v12.fbx'), { major: 12, suffix: '' });
+    assert.deepStrictEqual(parseVersion('/x/F-001_MIZUKI_v20f.fbx'), { major: 20, suffix: 'f' });
+    assert.deepStrictEqual(parseVersion('/x/F-001_MIZUKI_v9k.fbx'), { major: 9, suffix: 'k' });
+    assert.equal(parseVersion('/x/F-001_MIZUKI_final.fbx'), undefined);
+    assert.deepStrictEqual(parseVersionToken('20f'), { major: 20, suffix: 'f' });
+    assert.deepStrictEqual(parseVersionToken('v20f'), { major: 20, suffix: 'f' });
+    assert.deepStrictEqual(parseVersionToken(20), { major: 20, suffix: '' });
+  });
+
+  it('should order alphabet suffix versions after their major number', () => {
+    assert.ok(compareVersions(parseVersion('x_v20f.fbx'), parseVersion('x_v20e.fbx')) > 0);
+    assert.ok(compareVersions(parseVersion('x_v20f.fbx'), parseVersion('x_v9k.fbx')) > 0);
+    assert.ok(compareVersions(parseVersion('x_v20g.fbx'), parseVersion('x_v20f.fbx')) > 0);
+    assert.ok(compareVersions(parseVersion('x_v20.fbx'), parseVersion('x_v20a.fbx')) < 0);
+  });
+
+  it('should expand compact recipes and select the highest input version', async () => {
+    await withBatchFixture(async ({ dir, inputDir }) => {
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v20e.fbx'), 'v20e');
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v20f.fbx'), 'v20f');
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v9k.fbx'), 'v9k');
+      const recipeFile = path.join(dir, 'recipes.yaml');
+      const [recipe] = expandRecipeDocument({
+        defaults: {
+          converter: './converter.js',
+          inputDir: './inputs',
+          outputDir: './outputs',
+          args: {
+            boneProfile: 'auto',
+            shiftHipOrigin: false,
+          },
+        },
+        trimSets: {
+          f001: { inFrame: 860, outFrame: 8766 },
+        },
+        recipes: [{
+          id: 'mizuki.f001',
+          input: 'F-001_MIZUKI_v*.fbx',
+          useTrim: 'f001',
+          restPose: './rest.json',
+          output: 'F-001-MIZUKI.vrma',
+        }],
+      }, recipeFile);
+
+      const buildSpec = await createBuildSpec(recipe);
+
+      assert.equal(path.basename(buildSpec.inputFile), 'F-001_MIZUKI_v20f.fbx');
+      assert.equal(buildSpec.outputFile, path.join(dir, 'outputs', 'F-001-MIZUKI.vrma'));
+      assert.deepStrictEqual(buildSpec.argv.slice(-4), [
+        '-o',
+        path.join(dir, 'outputs', 'F-001-MIZUKI.vrma'),
+        '-i',
+        path.join(dir, 'inputs', 'F-001_MIZUKI_v20f.fbx'),
+      ]);
+      assert.ok(buildSpec.argv.includes('--no-shift-hip-origin'));
+      assert.ok(buildSpec.argv.includes('--trim-in-frame'));
+      assert.ok(buildSpec.argv.includes('--apply-rest-pose'));
+      assert.deepStrictEqual(buildSpec.configFiles, [{
+        file: path.join(dir, 'rest.json'),
+        sha256: buildSpec.configFiles[0].sha256,
+      }]);
+    });
+  });
+
+  it('should select an explicit alphabet suffix input version', async () => {
+    await withBatchFixture(async ({ dir, inputDir }) => {
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v20e.fbx'), 'v20e');
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v20f.fbx'), 'v20f');
+      const recipeFile = path.join(dir, 'recipes.yaml');
+      const [recipe] = expandRecipeDocument({
+        defaults: {
+          converter: './converter.js',
+          inputDir: './inputs',
+          outputDir: './outputs',
+        },
+        recipes: [{
+          id: 'mizuki.f001',
+          input: { pattern: 'F-001_MIZUKI_v*.fbx', version: '20e' },
+          output: 'F-001-MIZUKI.vrma',
+        }],
+      }, recipeFile);
+
+      const buildSpec = await createBuildSpec(recipe);
+
+      assert.equal(path.basename(buildSpec.inputFile), 'F-001_MIZUKI_v20e.fbx');
+    });
+  });
+
+  it('should expand nested builds with inherited overrides and generated ids', async () => {
+    await withBatchFixture(async ({ dir }) => {
+      const recipeFile = path.join(dir, 'nested.yaml');
+      const recipes = expandRecipeDocument({
+        defaults: {
+          converter: './converter.js',
+          inputDir: './inputs',
+          outputDir: './outputs',
+          args: {
+            boneProfile: 'auto',
+            shiftHipOrigin: false,
+          },
+        },
+        builds: [{
+          loopSmoothing: 0.2,
+          input: 'F-001_MIZUKI_v*.fbx',
+          shiftHipOrigin: true,
+          outputs: [
+            { inFrame: 860, outFrame: 1860, output: 'F-001_MIZUKI_loop_1.vrma' },
+            { inFrame: 2860, outFrame: 3860, output: 'F-001_MIZUKI_loop_2.vrma' },
+          ],
+        }],
+      }, recipeFile);
+
+      assert.equal(recipes.length, 2);
+      assert.equal(recipes[0].id, 'F-001_MIZUKI_loop_1');
+      assert.equal(recipes[1].id, 'F-001_MIZUKI_loop_2');
+      assert.deepStrictEqual(recipes[0].args, {
+        boneProfile: 'auto',
+        loopSmoothing: 0.2,
+        shiftHipOrigin: true,
+        trimInFrame: 860,
+        trimOutFrame: 1860,
+      });
+      assert.deepStrictEqual(recipes[1].args, {
+        boneProfile: 'auto',
+        loopSmoothing: 0.2,
+        shiftHipOrigin: true,
+        trimInFrame: 2860,
+        trimOutFrame: 3860,
+      });
+
+      const buildSpec = await createBuildSpec(recipes[0]);
+      assert.equal(path.basename(buildSpec.inputFile), 'F-001_MIZUKI_v12.fbx');
+      assert.ok(buildSpec.argv.includes('--trim-in-frame'));
+      assert.ok(!buildSpec.argv.includes('--no-shift-hip-origin'));
+    });
+  });
+
+  it('should detect fresh and stale sidecar states from recipe and input changes', async () => {
+    await withBatchFixture(async ({ dir, outputDir, inputDir }) => {
+      const recipeFile = path.join(dir, 'recipes.yaml');
+      const [recipe] = expandRecipeDocument({
+        defaults: {
+          converter: './converter.js',
+          inputDir: './inputs',
+          outputDir: './outputs',
+          args: { boneProfile: 'auto' },
+        },
+        recipes: [{
+          id: 'mizuki.f001',
+          input: 'F-001_MIZUKI_v*.fbx',
+          trim: { inFrame: 1, outFrame: 2 },
+          output: 'F-001-MIZUKI.vrma',
+        }],
+      }, recipeFile);
+      const buildSpec = await createBuildSpec(recipe);
+      writeFileSync(buildSpec.outputFile, 'vrma');
+      await writeSidecar(buildSpec);
+
+      assert.deepStrictEqual(await explainFreshness(buildSpec), { fresh: true, reasons: [] });
+
+      const changedRecipe = {
+        ...buildSpec,
+        recipeHash: 'different',
+      };
+      assert.deepStrictEqual(await explainFreshness(changedRecipe), {
+        fresh: false,
+        reasons: ['recipe changed'],
+      });
+
+      writeFileSync(path.join(inputDir, 'F-001_MIZUKI_v13.fbx'), 'v13');
+      const newInputSpec = await createBuildSpec(recipe);
+      const freshness = await explainFreshness(newInputSpec);
+      assert.equal(freshness.fresh, false);
+      assert.ok(freshness.reasons.includes('input selection changed'));
+    });
+  });
+});
 
 describe('generateHumanBones', () => {
   it('should map Mixamo bone names to VRM humanoid bones', () => {
@@ -1145,6 +1357,74 @@ describe('convertToVRMAWithTiming', () => {
     assert.equal(vrma.extras.framerate, 30);
     assert.equal(vrma.extras.sourceFramerate, 30);
     assert.equal(vrma.extras.frameCount, 0);
+  });
+
+  it('should compact stale animation buffer data after trimming', () => {
+    const converter = createConverter();
+    const gltfData = createAnimationGltf([0, 1, 2, 3], [0, 10, 20, 30]);
+    gltfData.nodes = [{ name: 'mixamorig:Hips' }];
+
+    converter.trimAnimationData(gltfData, { trimIn: 1, trimOut: 3 });
+    const grownTrimmedBufferLength = converter.decodeBuffers(gltfData)[0].length;
+
+    const vrma = converter.convertToVRMAWithTiming(gltfData);
+    const compactedBufferLength = Buffer.from(vrma.buffers[0].uri.split(',')[1], 'base64').length;
+    const sampler = vrma.animations[0].samplers[0];
+
+    assert.ok(grownTrimmedBufferLength > compactedBufferLength);
+    assert.equal(compactedBufferLength, 16);
+    assert.equal(vrma.buffers[0].byteLength, 16);
+    assert.equal(vrma.accessors.length, 2);
+    assert.equal(vrma.bufferViews.length, 2);
+    assert.equal(sampler.input, 0);
+    assert.equal(sampler.output, 1);
+  });
+
+  it('should preserve shared sampler timelines when compacting trimmed data', () => {
+    const converter = createConverter();
+    const times = [[0], [1], [2], [3]];
+    const valuesA = [[0], [10], [20], [30]];
+    const valuesB = [[100], [110], [120], [130]];
+    const timeBuffer = createFloatBuffer(times);
+    const valueBufferA = createFloatBuffer(valuesA);
+    const valueBufferB = createFloatBuffer(valuesB);
+    const buffer = Buffer.concat([timeBuffer, valueBufferA, valueBufferB]);
+    const gltfData = {
+      asset: { version: '2.0' },
+      nodes: [{ name: 'mixamorig:Hips' }, { name: 'mixamorig:Spine' }],
+      animations: [{
+        name: 'Loop',
+        channels: [
+          { sampler: 0, target: { node: 0, path: 'translation' } },
+          { sampler: 1, target: { node: 1, path: 'rotation' } },
+        ],
+        samplers: [
+          { input: 0, output: 1, interpolation: 'LINEAR' },
+          { input: 0, output: 2, interpolation: 'LINEAR' },
+        ],
+      }],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 4, type: 'SCALAR', min: [0], max: [3] },
+        { bufferView: 1, componentType: 5126, count: 4, type: 'SCALAR', min: [0], max: [30] },
+        { bufferView: 2, componentType: 5126, count: 4, type: 'SCALAR', min: [100], max: [130] },
+      ],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: timeBuffer.length },
+        { buffer: 0, byteOffset: timeBuffer.length, byteLength: valueBufferA.length },
+        { buffer: 0, byteOffset: timeBuffer.length + valueBufferA.length, byteLength: valueBufferB.length },
+      ],
+      buffers: [{
+        byteLength: buffer.length,
+        uri: `data:application/octet-stream;base64,${buffer.toString('base64')}`,
+      }],
+    };
+
+    converter.trimAnimationData(gltfData, { trimIn: 1, trimOut: 3 });
+    const vrma = converter.convertToVRMAWithTiming(gltfData);
+
+    assert.equal(vrma.animations[0].samplers[0].input, vrma.animations[0].samplers[1].input);
+    assert.equal(vrma.accessors.length, 3);
+    assert.equal(vrma.buffers[0].byteLength, 24);
   });
 
   it('should fail when no humanoid bones are matched', () => {

@@ -1,0 +1,28 @@
+defaults:
+  converter: ../fbx2vrma-converter.js
+  fbx2gltf: ../FBX2glTF-linux-x64
+  inputDir: /root/bulk
+  outputDir: /root/bulk
+  args:
+    boneProfile: auto
+    shiftHipOrigin: false
+
+builds:
+  - name: 2-actor full scene
+    loopSmoothing: 0
+    inFrame: 860
+    outFrame: 8766
+    outputs:
+      - input: F-001_MIZUKI_v*.fbx
+        output: F-001_MIZUKI_trimmed.vrma
+      - input: F-001_SHIRATAMA_v*.fbx
+        output: F-001_SHIRATAMA_trimmed.vrma
+
+  - loopSmoothing: 0.5
+    inFrame: 903
+    outFrame: 1249
+    outputs:
+      - input: SJ_A-003_MIZUKI_v*.fbx
+        output: SJ_A-003_MIZUKI.vrma
+      - input: SJ_A-003_SHIRATAMA_v*.fbx
+        output: SJ_A-003_SHIRATAMA.vrma

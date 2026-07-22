@@ -3,6 +3,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { Command } = require('commander');
 
@@ -1110,16 +1111,9 @@ class FBXToVRMAConverterFixed {
     }
 
     const bufferIndex = 0;
-    const components = ACCESSOR_COMPONENTS[type];
     const padding = (4 - (buffers[bufferIndex].length % 4)) % 4;
     const byteOffset = buffers[bufferIndex].length + padding;
-    const data = Buffer.alloc(elements.length * components * 4);
-
-    elements.forEach((element, elementIndex) => {
-      for (let componentIndex = 0; componentIndex < components; componentIndex++) {
-        data.writeFloatLE(element[componentIndex], (elementIndex * components + componentIndex) * 4);
-      }
-    });
+    const data = this.createAccessorDataBuffer(elements, type);
 
     buffers[bufferIndex] = Buffer.concat([
       buffers[bufferIndex],
@@ -1148,6 +1142,19 @@ class FBXToVRMAConverterFixed {
     return accessorIndex;
   }
 
+  createAccessorDataBuffer(elements, type) {
+    const components = ACCESSOR_COMPONENTS[type];
+    const data = Buffer.alloc(elements.length * components * 4);
+
+    elements.forEach((element, elementIndex) => {
+      for (let componentIndex = 0; componentIndex < components; componentIndex++) {
+        data.writeFloatLE(element[componentIndex], (elementIndex * components + componentIndex) * 4);
+      }
+    });
+
+    return data;
+  }
+
   convertToVRMAWithTiming(gltfData, options = {}) {
     console.log('Converting to VRMA with enhanced timing...');
 
@@ -1172,13 +1179,15 @@ class FBXToVRMAConverterFixed {
     if (options.restPoseData) {
       this.applyRestPoseData(gltfData, humanBones, options.restPoseData);
     }
+    gltfData.animations = this.processAnimationsWithTiming(gltfData.animations, animationDuration, humanBones);
+    this.compactAnimationBuffers(gltfData);
     const metadata = gltfData.extras?.animationMetadata;
     const vrmaData = {
       asset: gltfData.asset,
       scene: gltfData.scene,
       scenes: gltfData.scenes,
       nodes: gltfData.nodes?.map(node => this.stripNodeForVRMA(node)),
-      animations: this.processAnimationsWithTiming(gltfData.animations, animationDuration, humanBones),
+      animations: gltfData.animations,
       accessors: gltfData.accessors,
       bufferViews: gltfData.bufferViews,
       buffers: gltfData.buffers,
@@ -1213,6 +1222,68 @@ class FBXToVRMAConverterFixed {
       }
     }
     return stripped;
+  }
+
+  compactAnimationBuffers(gltfData) {
+    if (!gltfData.animations?.length || !gltfData.buffers?.length) return;
+
+    const oldBuffers = this.decodeBuffers(gltfData);
+    const oldAccessors = gltfData.accessors || [];
+    const newGltfData = {
+      accessors: [],
+      bufferViews: [],
+    };
+    const newBuffers = [Buffer.alloc(0)];
+    const accessorMap = new Map();
+    const duplicateAccessorMap = new Map();
+    let compactedAccessorCount = 0;
+    let reusedAccessorCount = 0;
+
+    const copyAccessor = accessorIndex => {
+      if (accessorIndex === undefined) return undefined;
+      if (accessorMap.has(accessorIndex)) return accessorMap.get(accessorIndex);
+
+      const accessor = oldAccessors[accessorIndex];
+      if (!accessor) {
+        throw new Error(`Animation references missing accessor ${accessorIndex}`);
+      }
+      const elements = this.readAccessorElements(gltfData, oldBuffers, accessorIndex);
+      const data = this.createAccessorDataBuffer(elements, accessor.type);
+      const duplicateKey = [
+        accessor.componentType,
+        accessor.type,
+        elements.length,
+        crypto.createHash('sha256').update(data).digest('hex'),
+      ].join(':');
+      if (duplicateAccessorMap.has(duplicateKey)) {
+        const newAccessorIndex = duplicateAccessorMap.get(duplicateKey);
+        accessorMap.set(accessorIndex, newAccessorIndex);
+        reusedAccessorCount++;
+        return newAccessorIndex;
+      }
+
+      const newAccessorIndex = this.appendAccessorData(newGltfData, newBuffers, elements, {
+        type: accessor.type,
+        componentType: accessor.componentType,
+      });
+      accessorMap.set(accessorIndex, newAccessorIndex);
+      duplicateAccessorMap.set(duplicateKey, newAccessorIndex);
+      compactedAccessorCount++;
+      return newAccessorIndex;
+    };
+
+    for (const animation of gltfData.animations) {
+      for (const sampler of animation.samplers || []) {
+        sampler.input = copyAccessor(sampler.input);
+        sampler.output = copyAccessor(sampler.output);
+      }
+    }
+
+    gltfData.accessors = newGltfData.accessors;
+    gltfData.bufferViews = newGltfData.bufferViews;
+    gltfData.buffers = [{ byteLength: newBuffers[0].length }];
+    this.encodeBuffers(gltfData, newBuffers);
+    console.log(`Compacted animation buffers to ${compactedAccessorCount} referenced accessor(s), ${newBuffers[0].length} bytes${reusedAccessorCount > 0 ? `; reused ${reusedAccessorCount} duplicate accessor reference(s)` : ''}`);
   }
 
   logHumanoidAncestorInfluencers(gltfData, humanBones) {
